@@ -145,3 +145,9 @@ _deps
 
 # Vcpkg
 vcpkg_installed
+
+# Local runtime/package cache
+.deps/
+
+# Editor/tool backup files
+*.bak
