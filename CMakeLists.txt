@@ -19,8 +19,19 @@ target_link_libraries(BlackHole2D PRIVATE ${DEPS})
 target_include_directories(BlackHole2D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 3D Black Hole executable
-add_executable(BlackHole3D black_hole.cpp)
+# On Windows, embed a manifest declaring Per-Monitor-V2 DPI awareness so a
+# wallpaper window covers the real pixel resolution instead of a virtualized box.
+set(BH3D_SOURCES black_hole.cpp)
+if(WIN32)
+    enable_language(RC)
+    list(APPEND BH3D_SOURCES app.rc)
+endif()
+add_executable(BlackHole3D ${BH3D_SOURCES})
 target_link_libraries(BlackHole3D PRIVATE ${DEPS})
+if(WIN32)
+    # DirectComposition wallpaper path (behind-icons on Win11 24H2)
+    target_link_libraries(BlackHole3D PRIVATE d3d11 dcomp dxgi uuid gdi32)
+endif()
 target_include_directories(BlackHole3D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Shader files (copy to output dir)

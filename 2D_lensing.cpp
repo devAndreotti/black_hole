@@ -17,7 +17,14 @@ double c = 299792458.0;
 double G = 6.67430e-11;
 
 struct Ray;
+extern std::vector<Ray> rays;
 void rk4Step(Ray& ray, double dλ, double rs);
+
+// Forward declarations of 2D lensing callbacks
+void scrollCallback2D(GLFWwindow* window, double xoffset, double yoffset);
+void mouseButtonCallback2D(GLFWwindow* window, int button, int action, int mods);
+void cursorPositionCallback2D(GLFWwindow* window, double xpos, double ypos);
+void keyCallback2D(GLFWwindow* window, int key, int scancode, int action, int mods);
 
 // --- Structs --- //
 struct Engine {
@@ -52,7 +59,12 @@ struct Engine {
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
-        glViewport(0, 0, WIDTH, HEIGHT);;
+        glViewport(0, 0, WIDTH, HEIGHT);
+        
+        glfwSetScrollCallback(window, scrollCallback2D);
+        glfwSetMouseButtonCallback(window, mouseButtonCallback2D);
+        glfwSetCursorPosCallback(window, cursorPositionCallback2D);
+        glfwSetKeyCallback(window, keyCallback2D);
     }
 
     void run() {
@@ -69,6 +81,7 @@ struct Engine {
     }
 };
 Engine engine;
+
 struct BlackHole {
     vec3 position;
     double mass;
@@ -149,6 +162,7 @@ struct Ray{
     void step(double dλ, double rs) {
         // 1) integrate (r,φ,dr,dφ)
         if(r <= rs) return; // stop if inside the event horizon
+        if(r > 2.0 * 1e11) return; // stop if escaped far out (initial viewport width was 1e11)
         rk4Step(*this, dλ, rs);
 
         // 2) convert back to cartesian x,y
@@ -160,6 +174,67 @@ struct Ray{
     }
 };
 vector<Ray> rays;
+
+// Callback definitions
+void scrollCallback2D(GLFWwindow* window, double xoffset, double yoffset) {
+    // Zoom factor: zoom in if scroll up
+    float factor = (yoffset > 0) ? 0.85f : 1.15f;
+    engine.width *= factor;
+    engine.height *= factor;
+}
+
+void mouseButtonCallback2D(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        double mx, my;
+        glfwGetCursorPos(window, &mx, &my);
+        
+        double left   = -engine.width + engine.offsetX;
+        double right  =  engine.width + engine.offsetX;
+        double bottom = -engine.height + engine.offsetY;
+        double top    =  engine.height + engine.offsetY;
+        
+        double wx = left + (mx / engine.WIDTH) * (right - left);
+        double wy = top - (my / engine.HEIGHT) * (top - bottom);
+        
+        // Spawn ray starting at this position pointing right
+        rays.push_back(Ray(vec2(wx, wy), vec2(c, 0.0f)));
+    }
+    else if (button == GLFW_MOUSE_BUTTON_MIDDLE || button == GLFW_MOUSE_BUTTON_RIGHT) {
+        if (action == GLFW_PRESS) {
+            engine.middleMousePressed = true;
+            glfwGetCursorPos(window, &engine.lastMouseX, &engine.lastMouseY);
+        } else if (action == GLFW_RELEASE) {
+            engine.middleMousePressed = false;
+        }
+    }
+}
+
+void cursorPositionCallback2D(GLFWwindow* window, double xpos, double ypos) {
+    if (engine.middleMousePressed) {
+        double dx = xpos - engine.lastMouseX;
+        double dy = ypos - engine.lastMouseY;
+        
+        double worldDx = (dx / engine.WIDTH) * (2.0f * engine.width);
+        double worldDy = (dy / engine.HEIGHT) * (2.0f * engine.height);
+        
+        engine.offsetX -= worldDx;
+        engine.offsetY += worldDy;
+        
+        engine.lastMouseX = xpos;
+        engine.lastMouseY = ypos;
+    }
+}
+
+void keyCallback2D(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        rays.clear();
+        // Spawn default bundle of 20 parallel rays
+        for (float y = -engine.height * 0.8f; y <= engine.height * 0.8f; y += engine.height * 0.08f) {
+            rays.push_back(Ray(vec2(-engine.width + engine.offsetX, y + engine.offsetY), vec2(c, 0.0f)));
+        }
+        cout << "[INFO] Reset 2D rays." << endl;
+    }
+}
 
 void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
     double r    = ray.r;
@@ -213,14 +288,20 @@ void rk4Step(Ray& ray, double dλ, double rs) {
 
 
 int main () {
-    //rays.push_back(Ray(vec2(-1e11, 3.27606302719999999e10), vec2(c, 0.0f)));
+    // Spawn default bundle of 20 parallel rays on launch
+    for (float y = -engine.height * 0.8f; y <= engine.height * 0.8f; y += engine.height * 0.08f) {
+        rays.push_back(Ray(vec2(-engine.width, y), vec2(c, 0.0f)));
+    }
+
     while(!glfwWindowShouldClose(engine.window)) {
         engine.run();
         SagA.draw();
 
         for (auto& ray : rays) {
             ray.step(1.0f, SagA.r_s);
-            ray.draw(rays);
+        }
+        if (!rays.empty()) {
+            rays[0].draw(rays); // Draw once for all rays to optimize
         }
 
         glfwSwapBuffers(engine.window);
