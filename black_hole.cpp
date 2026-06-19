@@ -30,11 +30,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 using namespace glm;
 using namespace std;
+namespace fs = std::filesystem;
 using Clock = std::chrono::high_resolution_clock;
 
 // Resolve a resource (shader) path next to the executable, so the app runs from
@@ -241,6 +243,21 @@ struct Engine {
     GLuint gridEBO = 0;
     int gridIndexCount = 0;
     GLuint gridFBO = 0;
+    // -- Bloom --
+    GLuint bloomFBO1 = 0, bloomFBO2 = 0;
+    GLuint bloomTex1 = 0, bloomTex2 = 0;
+    GLuint bloomThreshProg = 0, bloomBlurProg = 0;
+    int    bloomAllocW = 0, bloomAllocH = 0;
+    bool   bloomEnabled   = true;
+    float  bloomStrength  = 0.65f;
+    float  bloomThreshold = 0.60f;
+    // -- Hot-reload --
+    fs::file_time_type lastShaderMtime{};
+    // -- PBO async readback (terminal + DComp modes) --
+    GLuint pbo[2]        = {0, 0};
+    int    pboRead       = 0, pboWrite = 1;
+    bool   pboReady      = false;
+    size_t pboAllocSize  = 0;
 
     int WIDTH = 800;  // Window width
     int HEIGHT = 600; // Window height
@@ -299,6 +316,8 @@ struct Engine {
         gridShaderProgram = CreateShaderProgram("grid.vert", "grid.frag");
 
         computeProgram = CreateComputeProgram("geodesic.comp");
+        try { lastShaderMtime = fs::last_write_time(resourcePath("geodesic.comp")); } catch (...) {}
+        initBloom();
         glGenBuffers(1, &cameraUBO);
         glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
         glBufferData(GL_UNIFORM_BUFFER, 128, nullptr, GL_DYNAMIC_DRAW); // alloc ~128 bytes
@@ -453,16 +472,234 @@ struct Engine {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     }
+    // Non-fatal version of CreateComputeProgram: returns 0 on compile/link error.
+    GLuint tryCreateComputeProgram(const char* path) {
+        std::ifstream in(resourcePath(path));
+        if (!in.is_open()) return 0;
+        std::stringstream ss; ss << in.rdbuf();
+        std::string srcStr = ss.str();
+        const char* src = srcStr.c_str();
+
+        GLuint cs = glCreateShader(GL_COMPUTE_SHADER);
+        glShaderSource(cs, 1, &src, nullptr);
+        glCompileShader(cs);
+        GLint ok; glGetShaderiv(cs, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            GLint len; glGetShaderiv(cs, GL_INFO_LOG_LENGTH, &len);
+            std::vector<char> log(len);
+            glGetShaderInfoLog(cs, len, nullptr, log.data());
+            std::cerr << "[RELOAD ERROR] " << log.data() << "\n";
+            glDeleteShader(cs); return 0;
+        }
+        GLuint prog = glCreateProgram();
+        glAttachShader(prog, cs);
+        glLinkProgram(prog);
+        glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            GLint len; glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &len);
+            std::vector<char> log(len);
+            glGetProgramInfoLog(prog, len, nullptr, log.data());
+            std::cerr << "[RELOAD LINK ERROR] " << log.data() << "\n";
+            glDeleteProgram(prog); glDeleteShader(cs); return 0;
+        }
+        glDeleteShader(cs);
+        return prog;
+    }
+    // Returns true if shader was reloaded (caller should reset accumSample + dirty).
+    bool checkShaderReload() {
+        try {
+            auto mtime = fs::last_write_time(resourcePath("geodesic.comp"));
+            if (mtime == lastShaderMtime) return false;
+            lastShaderMtime = mtime;
+            GLuint newProg = tryCreateComputeProgram("geodesic.comp");
+            if (newProg != 0) {
+                glDeleteProgram(computeProgram);
+                computeProgram = newProg;
+                std::cout << "[RELOAD] geodesic.comp\n";
+                return true;
+            }
+        } catch (...) {}
+        return false;
+    }
+    void initPBO(size_t size) {
+        if (pbo[0] == 0) glGenBuffers(2, pbo);
+        if (pboAllocSize == size) return;
+        pboAllocSize = size;
+        for (int i = 0; i < 2; i++) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[i]);
+            glBufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)size, nullptr, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        pboReady = false; pboRead = 0; pboWrite = 1;
+    }
+    // Issue async readback of `texture` into the write PBO and return a pointer
+    // to the previous frame's data (from read PBO). Returns nullptr on first call.
+    // Caller must call pboRelease() when done with the pointer.
+    const unsigned char* pboBeginRead(GLenum format) {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[pboWrite]);
+        glGetTexImage(GL_TEXTURE_2D, 0, format, GL_UNSIGNED_BYTE, nullptr); // async DMA
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+        const unsigned char* ptr = nullptr;
+        if (pboReady) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[pboRead]);
+            ptr = (const unsigned char*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        }
+        return ptr;
+    }
+    void pboEndRead() {
+        if (pboReady) {
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        }
+        std::swap(pboRead, pboWrite);
+        pboReady = true;
+    }
+    GLuint createInlineProg(const char* vsSrc, const char* fsSrc) {
+        auto compile = [](const char* src, GLenum type) -> GLuint {
+            GLuint s = glCreateShader(type);
+            glShaderSource(s, 1, &src, nullptr);
+            glCompileShader(s);
+            GLint ok; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+            if (!ok) {
+                GLint len; glGetShaderiv(s, GL_INFO_LOG_LENGTH, &len);
+                std::vector<char> log(len);
+                glGetShaderInfoLog(s, len, nullptr, log.data());
+                std::cerr << "Bloom shader error: " << log.data() << "\n";
+            }
+            return s;
+        };
+        GLuint vs = compile(vsSrc, GL_VERTEX_SHADER);
+        GLuint fs = compile(fsSrc, GL_FRAGMENT_SHADER);
+        GLuint prog = glCreateProgram();
+        glAttachShader(prog, vs); glAttachShader(prog, fs);
+        glLinkProgram(prog);
+        glDeleteShader(vs); glDeleteShader(fs);
+        return prog;
+    }
+    void initBloom() {
+        const char* quadVS = R"(#version 330 core
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aTexCoord;
+out vec2 TexCoord;
+void main() { gl_Position = vec4(aPos,0,1); TexCoord = aTexCoord; })";
+
+        const char* threshFS = R"(#version 330 core
+in vec2 TexCoord; out vec4 FragColor;
+uniform sampler2D screenTexture;
+uniform float threshold;
+void main() {
+    vec3 c = texture(screenTexture, TexCoord).rgb;
+    float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    FragColor = vec4(lum > threshold ? c : vec3(0.0), 1.0);
+})";
+
+        const char* blurFS = R"(#version 330 core
+in vec2 TexCoord; out vec4 FragColor;
+uniform sampler2D blurTex;
+uniform vec2 texelSize;
+uniform bool horizontal;
+const float w[5] = float[](0.2270, 0.1946, 0.1216, 0.0541, 0.0162);
+void main() {
+    vec2 dir = horizontal ? vec2(texelSize.x, 0.0) : vec2(0.0, texelSize.y);
+    vec3 res = texture(blurTex, TexCoord).rgb * w[0];
+    for (int i = 1; i < 5; i++) {
+        res += texture(blurTex, TexCoord + dir * float(i)).rgb * w[i];
+        res += texture(blurTex, TexCoord - dir * float(i)).rgb * w[i];
+    }
+    FragColor = vec4(res, 1.0);
+})";
+
+        bloomThreshProg = createInlineProg(quadVS, threshFS);
+        bloomBlurProg   = createInlineProg(quadVS, blurFS);
+
+        glGenFramebuffers(1, &bloomFBO1);
+        glGenFramebuffers(1, &bloomFBO2);
+        glGenTextures(1, &bloomTex1);
+        glGenTextures(1, &bloomTex2);
+
+        for (GLuint tex : {bloomTex1, bloomTex2}) {
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            // initialise to black so composite is clean on first frame
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_FLOAT, nullptr);
+        }
+    }
+    void ensureBloom(int w, int h) {
+        int bw = std::max(1, w / 2);
+        int bh = std::max(1, h / 2);
+        if (bloomAllocW == bw && bloomAllocH == bh) return;
+        bloomAllocW = bw; bloomAllocH = bh;
+
+        auto setup = [&](GLuint fbo, GLuint tex) {
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, bw, bh, 0, GL_RGBA, GL_FLOAT, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        };
+        setup(bloomFBO1, bloomTex1);
+        setup(bloomFBO2, bloomTex2);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    void doBloom(int srcW, int srcH) {
+        if (!bloomEnabled) return;
+        ensureBloom(srcW, srcH);
+        int bw = bloomAllocW, bh = bloomAllocH;
+
+        GLint prevVP[4];
+        glGetIntegerv(GL_VIEWPORT, prevVP);
+        glViewport(0, 0, bw, bh);
+        glDisable(GL_DEPTH_TEST);
+
+        // Pass 1: threshold → bloomTex1
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO1);
+        glUseProgram(bloomThreshProg);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glUniform1i(glGetUniformLocation(bloomThreshProg, "screenTexture"), 0);
+        glUniform1f(glGetUniformLocation(bloomThreshProg, "threshold"), bloomThreshold);
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);
+
+        // Pass 2: horizontal Gaussian bloomTex1 → bloomTex2
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO2);
+        glUseProgram(bloomBlurProg);
+        glBindTexture(GL_TEXTURE_2D, bloomTex1);
+        glUniform1i(glGetUniformLocation(bloomBlurProg, "blurTex"), 0);
+        glUniform2f(glGetUniformLocation(bloomBlurProg, "texelSize"), 1.0f/bw, 1.0f/bh);
+        glUniform1i(glGetUniformLocation(bloomBlurProg, "horizontal"), GL_TRUE);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);
+
+        // Pass 3: vertical Gaussian bloomTex2 → bloomTex1
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO1);
+        glBindTexture(GL_TEXTURE_2D, bloomTex2);
+        glUniform1i(glGetUniformLocation(bloomBlurProg, "horizontal"), GL_FALSE);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(prevVP[0], prevVP[1], prevVP[2], prevVP[3]);
+        glEnable(GL_DEPTH_TEST);
+    }
     void drawFullScreenQuad() {
-        glUseProgram(shaderProgram); // fragment + vertex shader
+        glUseProgram(shaderProgram);
         glBindVertexArray(quadVAO);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
         glUniform1i(glGetUniformLocation(shaderProgram, "screenTexture"), 0);
 
-        glDisable(GL_DEPTH_TEST);  // draw as background
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);  // 2 triangles
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, bloomTex1);
+        glUniform1i(glGetUniformLocation(shaderProgram, "bloomTexture"), 1);
+        glUniform1f(glGetUniformLocation(shaderProgram, "bloomStrength"),
+                    bloomEnabled ? bloomStrength : 0.0f);
+
+        glDisable(GL_DEPTH_TEST);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);
         glEnable(GL_DEPTH_TEST);
     }
     GLuint CreateShaderProgram(){
@@ -481,10 +718,12 @@ struct Engine {
         in vec2 TexCoord;
         out vec4 FragColor;
         uniform sampler2D screenTexture;
+        uniform sampler2D bloomTexture;
+        uniform float bloomStrength;
         void main() {
-            // Force opaque: the compute output has alpha=0 on background pixels,
-            // which DWM would otherwise composite as a see-through window.
-            FragColor = vec4(texture(screenTexture, TexCoord).rgb, 1.0);
+            vec3 base = texture(screenTexture, TexCoord).rgb;
+            vec3 glow = texture(bloomTexture,  TexCoord).rgb;
+            FragColor = vec4(base + glow * bloomStrength, 1.0);
         })";
 
         // vertex shader
@@ -656,6 +895,9 @@ struct Engine {
 
         // 6) draw grid on top of the texture
         drawGridToTexture(cam, sampleIndex == 0);
+
+        // 7) bloom post-process (reads texture, writes bloomTex1)
+        doBloom(cw, ch);
     }
     void uploadCameraUBO(const Camera& cam, int renderWidth, int renderHeight, int steps, float dLambda,
                          int sampleIndex, vec2 jitter) {
@@ -884,6 +1126,43 @@ static void saveSessionState(const std::string& mode) {
     }
 }
 
+static void saveScreenshot(int w, int h) {
+    static int count = 0;
+    char name[64];
+    snprintf(name, sizeof(name), "bh_%04d.bmp", ++count);
+
+    std::vector<unsigned char> px(w * h * 3);
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+
+    // BMP: BGR pixel order, rows stored bottom-up (matches GL origin — no flip needed)
+    int rowBytes = w * 3;
+    int pad      = (4 - rowBytes % 4) % 4;
+    int stride   = rowBytes + pad;
+    int fileSize = 54 + stride * h;
+
+    unsigned char hdr[54] = {};
+    hdr[0]='B'; hdr[1]='M';
+    hdr[2]=fileSize;    hdr[3]=fileSize>>8;  hdr[4]=fileSize>>16; hdr[5]=fileSize>>24;
+    hdr[10]=54;
+    hdr[14]=40;
+    hdr[18]=w; hdr[19]=w>>8; hdr[20]=w>>16; hdr[21]=w>>24;
+    hdr[22]=h; hdr[23]=h>>8; hdr[24]=h>>16; hdr[25]=h>>24;
+    hdr[26]=1; hdr[28]=24;
+
+    std::ofstream f(name, std::ios::binary);
+    f.write(reinterpret_cast<char*>(hdr), 54);
+    std::vector<unsigned char> row(stride, 0);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            row[x*3+0] = px[(y*w+x)*3+2]; // B
+            row[x*3+1] = px[(y*w+x)*3+1]; // G
+            row[x*3+2] = px[(y*w+x)*3+0]; // R
+        }
+        f.write(reinterpret_cast<char*>(row.data()), stride);
+    }
+    std::cout << "[INFO] Screenshot: " << name << " (" << w << "x" << h << ")\n";
+}
+
 void setupCameraCallbacks(GLFWwindow* window) {
     glfwSetWindowUserPointer(window, &camera);
 
@@ -911,19 +1190,19 @@ void setupCameraCallbacks(GLFWwindow* window) {
         if (action == GLFW_PRESS || action == GLFW_REPEAT) {
             if (key == GLFW_KEY_LEFT) {
                 cam->azimuth -= 0.10f;
-                cam->update();
+                cam->update(true);
             }
             else if (key == GLFW_KEY_RIGHT) {
                 cam->azimuth += 0.10f;
-                cam->update();
+                cam->update(true);
             }
             else if (key == GLFW_KEY_UP) {
                 cam->elevation = glm::clamp(cam->elevation - 0.08f, 0.01f, float(M_PI) - 0.01f);
-                cam->update();
+                cam->update(true);
             }
             else if (key == GLFW_KEY_DOWN) {
                 cam->elevation = glm::clamp(cam->elevation + 0.08f, 0.01f, float(M_PI) - 0.01f);
-                cam->update();
+                cam->update(true);
             }
             // Standard zoom using + / - keys
             else if (key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD) {
@@ -959,6 +1238,14 @@ void setupCameraCallbacks(GLFWwindow* window) {
             }
             else if (key == GLFW_KEY_Q || key == GLFW_KEY_ESCAPE) {
                 glfwSetWindowShouldClose(win, GLFW_TRUE);
+            }
+            else if (key == GLFW_KEY_S) {
+                saveScreenshot(engine.WIDTH, engine.HEIGHT);
+            }
+            else if (key == GLFW_KEY_B) {
+                engine.bloomEnabled = !engine.bloomEnabled;
+                cout << "[INFO] Bloom: " << (engine.bloomEnabled ? "ON" : "OFF") << "\n";
+                cam->dirty = true;
             }
         }
     });
@@ -1290,9 +1577,13 @@ static void runTerminal(Engine& eng) {
         eng.dispatchCompute(camera, 0);
         glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
 
-        px.resize(size_t(ssW) * ssH * 4);
-        glBindTexture(GL_TEXTURE_2D, eng.texture);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        // PBO async readback: issue DMA into write PBO, read previous frame from read PBO
+        size_t texBytes = size_t(ssW) * ssH * 4;
+        eng.initPBO(texBytes);
+        const unsigned char* pboPtr = eng.pboBeginRead(GL_RGBA);
+        px.resize(texBytes);
+        if (pboPtr) memcpy(px.data(), pboPtr, texBytes);
+        eng.pboEndRead();
 
         // box-average SSxSS -> one cell pixel, flipping GL's bottom-origin to top-down
         dn.assign(size_t(tw) * th * 3, 0);
@@ -1455,7 +1746,6 @@ static void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
     wallpaper.baseAzimuth = camera.azimuth; wallpaper.baseElevation = camera.elevation;
     wlog("DComp wallpaper behind icons, render " + std::to_string(rw) + "x" + std::to_string(rh));
 
-    std::vector<unsigned char> px(size_t(rw) * rh * 4);
     int accumSample = 0;
     const int ACCUM_SAMPLES = 16;
     const double minFrame = 1.0 / 30.0; double last = glfwGetTime();
@@ -1487,17 +1777,20 @@ static void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
         }
 
         glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
-        glBindTexture(GL_TEXTURE_2D, eng.texture);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
 
-        D3D11_MAPPED_SUBRESOURCE ms;
-        if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
-            // GL readback is bottom-up; flip into the top-down D3D texture.
-            for (int y = 0; y < rh; ++y)
-                memcpy((unsigned char*)ms.pData + size_t(y) * ms.RowPitch,
-                       px.data() + size_t(rh - 1 - y) * rw * 4, size_t(rw) * 4);
-            ctx->Unmap(staging, 0);
+        // PBO async readback: issue DMA into write PBO, upload previous frame to D3D11
+        eng.initPBO(size_t(rw) * rh * 4);
+        const unsigned char* pboPtr = eng.pboBeginRead(GL_BGRA);
+        if (pboPtr) {
+            D3D11_MAPPED_SUBRESOURCE ms;
+            if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+                for (int y = 0; y < rh; ++y)
+                    memcpy((unsigned char*)ms.pData + size_t(y) * ms.RowPitch,
+                           pboPtr + size_t(rh - 1 - y) * rw * 4, size_t(rw) * 4);
+                ctx->Unmap(staging, 0);
+            }
         }
+        eng.pboEndRead();
         ID3D11Texture2D* back = nullptr; sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back);
         if (back) { ctx->CopyResource(back, staging); back->Release(); }
         sc->Present(1, 0);
@@ -1720,6 +2013,7 @@ int main(int argc, char** argv) {
     const double wpMinFrame = wallpaperMode ? (1.0 / 30.0) : 0.0;
     double lastFrameStart = glfwGetTime();
     while (!glfwWindowShouldClose(engine.window)) {
+        if (engine.checkShaderReload()) { accumSample = 0; camera.dirty = true; }
 #ifdef _WIN32
         if (wallpaperMode) wallpaperUpdate(engine.window);
 #endif
