@@ -87,14 +87,19 @@ float kerrDphi(float r, float theta, float E, float L, float Q) {
     return clamp((L/st2 - a*E + a*P/D) / S, -100.0, 100.0);
 }
 
-// ── initRay: shared Y-polar setup, then per-model conserved quantities ───────
+// ── initRay: per-model coordinate convention, then conserved quantities ──────
+// Kerr → Y-polar (spin axis = Y, physically required). Legacy/Schwarzschild →
+// Z-polar (the original code's convention): spherical symmetry makes the axis
+// free, and Z keeps the coordinate seam OUT of the vertical centre of the view
+// (Y-polar put a seam straight up/down the image through the shadow).
 Ray initRay(vec3 pos, vec3 dir) {
     Ray ray;
     ray.x = pos.x; ray.y = pos.y; ray.z = pos.z;   // SI
     float rmag = length(pos);
     ray.r = rmag / U;                               // scaled
-    ray.theta = acos(pos.y / rmag);
-    ray.phi   = atan(pos.z, pos.x);
+    bool kerr = useKerr();
+    if (kerr) { ray.theta = acos(pos.y / rmag); ray.phi = atan(pos.z, pos.x); }
+    else      { ray.theta = acos(pos.z / rmag); ray.phi = atan(pos.y, pos.x); }
 
     float r = ray.r, th = ray.theta;
     float st = sin(th), ct = cos(th);
@@ -103,9 +108,15 @@ Ray initRay(vec3 pos, vec3 dir) {
     float sth = max(st, 0.02);        // clamped sin θ for the φ denominator
 
     float dx = dir.x, dy = dir.y, dz = dir.z;
-    ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
-    ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
-    ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
+    if (kerr) {                                       // Y-polar Jacobian
+        ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
+        ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
+        ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
+    } else {                                          // Z-polar Jacobian
+        ray.dr     =  st*cp*dx + st*sp*dy + ct*dz;
+        ray.dtheta = (ct*cp*dx + ct*sp*dy - st*dz) / r;
+        ray.dphi   = (-sp*dx + cp*dy) / (r * sth);
+    }
     ray.Q = 0.0;
 
     if (useKerr()) {
@@ -224,9 +235,13 @@ void rk4Step(inout Ray ray, float dL) {
     ray.dphi   += dL/6.0 * (k1b.z + 2.0*k2b.z + 2.0*k3b.z + k4b.z);
 
     float rs_si = ray.r * U;
-    ray.x = rs_si * sin(ray.theta) * cos(ray.phi);
-    ray.y = rs_si * cos(ray.theta);
-    ray.z = rs_si * sin(ray.theta) * sin(ray.phi);
+    float st = sin(ray.theta), ct = cos(ray.theta);
+    float cp = cos(ray.phi),   sp = sin(ray.phi);
+    if (useKerr()) {            // Y-polar: y = r·cosθ
+        ray.x = rs_si*st*cp; ray.y = rs_si*ct;    ray.z = rs_si*st*sp;
+    } else {                    // Z-polar: z = r·cosθ  (original convention)
+        ray.x = rs_si*st*cp; ray.y = rs_si*st*sp; ray.z = rs_si*ct;
+    }
 }
 // --- Deep-sky helpers ---
 float starHash(vec3 p) {
