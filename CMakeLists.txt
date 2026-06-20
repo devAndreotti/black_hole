@@ -21,7 +21,12 @@ target_include_directories(BlackHole2D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # 3D Black Hole executable
 # On Windows, embed a manifest declaring Per-Monitor-V2 DPI awareness so a
 # wallpaper window covers the real pixel resolution instead of a virtualized box.
-set(BH3D_SOURCES black_hole.cpp)
+set(BH3D_SOURCES
+    black_hole.cpp
+    bh_engine.cpp
+    bh_wallpaper.cpp
+    bh_terminal.cpp
+)
 if(WIN32)
     enable_language(RC)
     list(APPEND BH3D_SOURCES app.rc)

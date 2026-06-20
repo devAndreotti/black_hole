@@ -42,7 +42,7 @@ foreach ($copy in $dllCopies) {
     }
 }
 
-foreach ($shader in @("geodesic.comp", "grid.vert", "grid.frag")) {
+foreach ($shader in @("geodesic.comp", "geodesic_legacy.comp", "grid.vert", "grid.frag")) {
     Copy-Item -LiteralPath (Join-Path $root $shader) -Destination (Join-Path $build $shader) -Force
 }
 
