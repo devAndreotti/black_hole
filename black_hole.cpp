@@ -107,6 +107,38 @@ static void saveScreenshot(int w, int h) {
     std::cout<<"[INFO] Screenshot: "<<name<<" ("<<w<<"x"<<h<<")\n";
 }
 
+// ── Headless high-res render to BMP (--render): for visual validation ─────────
+static void renderToFile(int w, int h, float elev, float azim, double zoom, const char* fname) {
+    engine.WIDTH = w; engine.HEIGHT = h;
+    engine.COMPUTE_WIDTH = engine.COMPUTE_MOVING_WIDTH = w;
+    engine.COMPUTE_HEIGHT = engine.COMPUTE_MOVING_HEIGHT = h;
+    engine.COMPUTE_D_LAMBDA = engine.COMPUTE_MOVING_D_LAMBDA = 7.5e8f;
+    camera.elevation = glm::clamp(elev, 0.01f, float(M_PI)-0.01f);
+    camera.azimuth = azim;
+    camera.radius = glm::clamp((float)zoom, camera.minRadius, camera.maxRadius);
+    camera.moving = false; camera.dirty = true; camera.target = vec3(0.0f);
+    for (int s = 0; s < 24; ++s) engine.dispatchCompute(camera, s);  // TAA accumulate
+    std::vector<unsigned char> px((size_t)w*h*4);
+    glBindTexture(GL_TEXTURE_2D, engine.texture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    int rowBytes=w*3, pad=(4-rowBytes%4)%4, stride=rowBytes+pad, fileSize=54+stride*h;
+    unsigned char hdr[54]={}; hdr[0]='B';hdr[1]='M';
+    hdr[2]=fileSize;hdr[3]=fileSize>>8;hdr[4]=fileSize>>16;hdr[5]=fileSize>>24;
+    hdr[10]=54;hdr[14]=40;
+    hdr[18]=w;hdr[19]=w>>8;hdr[20]=w>>16;hdr[21]=w>>24;
+    hdr[22]=h;hdr[23]=h>>8;hdr[24]=h>>16;hdr[25]=h>>24;
+    hdr[26]=1;hdr[28]=24;
+    std::ofstream f(fname,std::ios::binary);
+    f.write(reinterpret_cast<char*>(hdr),54);
+    std::vector<unsigned char> row(stride,0);
+    for (int y=0;y<h;y++) {                       // BMP is bottom-up; texture row 0 = top
+        const unsigned char* p=&px[(size_t)(h-1-y)*w*4];
+        for (int x=0;x<w;x++){ row[x*3+0]=p[x*4+2]; row[x*3+1]=p[x*4+1]; row[x*3+2]=p[x*4+0]; }
+        f.write(reinterpret_cast<char*>(row.data()),stride);
+    }
+    std::cout<<"[INFO] Rendered "<<fname<<" "<<w<<"x"<<h<<"\n";
+}
+
 // ── Camera callbacks ─────────────────────────────────────────────────────────
 void setupCameraCallbacks(GLFWwindow* win) {
     glfwSetWindowUserPointer(win, &camera);
@@ -181,6 +213,8 @@ static void runUnitTests() {
 // ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char** argv) {
     bool wallpaperMode=false, terminalMode=false, dcompMode=false, runTests=false, legacyMode=false;
+    bool renderMode=false; int rW=900, rH=600; float rElev=1.35f, rAzim=0.6f; double rZoom=1.05e11;
+    const char* rOut="render.bmp";
     for (int i=1;i<argc;++i) {
         if (!strcmp(argv[i],"--wallpaper")||!strcmp(argv[i],"-w")) wallpaperMode=true;
         else if (!strcmp(argv[i],"--terminal")||!strcmp(argv[i],"-t")) terminalMode=true;
@@ -194,6 +228,12 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i],"--spin") && i+1<argc) { engine.kerrSpin=atof(argv[++i]); }
         else if (!strcmp(argv[i],"--anim"))  engine.diskAnimEnabled=true;
         else if (!strcmp(argv[i],"--legacy")||!strcmp(argv[i],"-l")||!strcmp(argv[i],"legacy")) legacyMode=true;
+        else if (!strcmp(argv[i],"--render")) renderMode=true;
+        else if (!strcmp(argv[i],"--size") && i+1<argc) { sscanf(argv[++i],"%dx%d",&rW,&rH); }
+        else if (!strcmp(argv[i],"--elev") && i+1<argc) rElev=atof(argv[++i]);
+        else if (!strcmp(argv[i],"--azim") && i+1<argc) rAzim=atof(argv[++i]);
+        else if (!strcmp(argv[i],"--zoom") && i+1<argc) rZoom=atof(argv[++i]);
+        else if (!strcmp(argv[i],"--out")  && i+1<argc) rOut=argv[++i];
     }
     if (runTests) { runUnitTests(); return 0; }
 
@@ -209,6 +249,11 @@ int main(int argc, char** argv) {
         } else {
             std::cerr << "[WARN] geodesic_legacy.comp nao encontrado; seguindo com shader atual\n";
         }
+    }
+
+    if (renderMode) {
+        renderToFile(rW, rH, rElev, rAzim, rZoom, rOut);
+        glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
     }
 
     setupCameraCallbacks(engine.window);

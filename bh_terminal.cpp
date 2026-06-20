@@ -55,6 +55,11 @@ void runTerminal(Engine& eng) {
                     else if (vk==VK_OEM_MINUS||vk==VK_SUBTRACT){ camera.processScroll(0,-1); saveSessionState("terminal"); }
                     else if (vk=='M') showGrid=!showGrid;
                     else if (vk=='G') Gravity=!Gravity;
+                    else if (vk=='B') eng.bloomEnabled=!eng.bloomEnabled;
+                    else if (vk=='K') eng.kerrSpin=(eng.kerrSpin<0.01f)?0.9f:0.0f;
+                    else if (vk=='A') eng.diskAnimEnabled=!eng.diskAnimEnabled;
+                    else if (vk==VK_OEM_PERIOD) eng.kerrSpin=glm::clamp(eng.kerrSpin+0.1f,0.0f,1.0f);
+                    else if (vk==VK_OEM_COMMA)  eng.kerrSpin=glm::clamp(eng.kerrSpin-0.1f,0.0f,1.0f);
                     else if (vk==VK_OEM_4) { eng.COMPUTE_STEPS=std::max(100,eng.COMPUTE_STEPS-100); eng.COMPUTE_MOVING_STEPS=eng.COMPUTE_STEPS; saveSessionState("terminal"); }
                     else if (vk==VK_OEM_6) { eng.COMPUTE_STEPS=std::min(2000,eng.COMPUTE_STEPS+100); eng.COMPUTE_MOVING_STEPS=eng.COMPUTE_STEPS; saveSessionState("terminal"); }
                 } else if (recs[i].EventType==MOUSE_EVENT) {

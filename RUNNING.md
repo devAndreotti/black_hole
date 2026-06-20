@@ -53,6 +53,7 @@ Use o wrapper `.\run.ps1 <modo> [flags]` (recomendado) **ou** chame o exe direto
 | `--red` | Disco em tons de vermelho |
 | `--white` | Disco em tons de branco |
 | `--test` | Roda os testes unitários e sai |
+| `--render` | Renderiza 1 frame headless em alta-res e salva BMP, depois sai (validação visual). Sub-flags: `--size 900x600`, `--elev <rad>`, `--azim <rad>`, `--zoom <metros>`, `--out arquivo.bmp` |
 
 Exemplos:
 ```powershell
@@ -85,7 +86,8 @@ Exemplos:
 
 ### Modo terminal
 Setas (orbitar), `+`/`-` (zoom), `[`/`]` (passos), `M` (grade), `G` (gravidade),
-mouse passando = parallax, `Q`/`Esc` = sair. *(Kerr/anim no terminal: passe `--spin`/`--anim` na linha de comando.)*
+**`K`** (spin Kerr 0↔0.9), **`.`/`,`** (spin fino ±0.1), **`A`** (animação), **`B`** (bloom),
+mouse passando = parallax, `Q`/`Esc` = sair.
 
 ### Modo wallpaper
 Mouse = parallax. **Ctrl+Alt+Q** = sair (atalho global).
