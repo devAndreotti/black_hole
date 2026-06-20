@@ -147,6 +147,13 @@ void setupCameraCallbacks(GLFWwindow* win) {
                 cam->dirty=true;
                 std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
             }
+            // Fine Kerr-spin control: '.' raises, ',' lowers (clamped to [0,1]).
+            if (key==GLFW_KEY_PERIOD || key==GLFW_KEY_COMMA) {
+                float d = (key==GLFW_KEY_PERIOD) ? 0.1f : -0.1f;
+                engine.kerrSpin = glm::clamp(engine.kerrSpin + d, 0.0f, 1.0f);
+                cam->dirty=true;
+                std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
+            }
         }
     });
 }

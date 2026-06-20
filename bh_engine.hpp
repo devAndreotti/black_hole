@@ -32,7 +32,6 @@ struct Engine {
     int COMPUTE_MOVING_WIDTH = 320, COMPUTE_MOVING_HEIGHT = 240;
     int COMPUTE_STEPS = 600, COMPUTE_MOVING_STEPS = 600;
     float COMPUTE_D_LAMBDA = 7.5e8f, COMPUTE_MOVING_D_LAMBDA = 7.5e8f;
-    float width = 100000000000.0f, height = 75000000000.0f;
 
     Engine();
     void generateGrid(const vector<ObjectData>& objs);

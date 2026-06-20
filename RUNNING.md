@@ -75,6 +75,7 @@ Exemplos:
 | `+` / `-` (ou `=` / `-`) | Zoom in / out |
 | `[` / `]` | Menos / mais passos de integração (qualidade vs. perf) |
 | **`K`** | Liga/desliga **spin de Kerr** (0 ↔ 0.9) |
+| **`.`** / **`,`** | Ajuste fino do spin de Kerr (+/− 0.1, faixa 0–1) |
 | **`A`** | Liga/desliga **animação Kepleriana** do disco |
 | `G` (ou botão direito) | Liga/desliga gravidade (N-body dos sóis) |
 | `M` | Mostra/esconde a grade |
