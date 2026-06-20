@@ -362,6 +362,8 @@ void main() {
     int steps = cam.steps;
     float dLambda = cam.dLambda / U;
     float escapeR = float(ESCAPE_R) / U;
+    float halfThick    = thickness * 1.5;        // SI half-height of the disk slab
+    float halfThickScl = halfThick / U;          // same, in scaled (r_s) units
 
     for (int i = 0; i < steps; ++i) {
         if (intercept(ray)) { hitBlackHole = true; break; }
@@ -370,16 +372,27 @@ void main() {
         // where tiny trajectory changes scatter rays to different destinations →
         // per-pixel speckle. The legacy/a=0 path is left untouched (already clean).
         if (useKerr() && ray.r < 4.0) dL *= 0.4;
+        // Refine while approaching/inside the disk slab so a steep ray cannot step
+        // over it and the volume is sampled cleanly.
+        float cylR0 = length(vec2(ray.x, ray.z));
+        if (cylR0 >= disk_r1 && cylR0 <= disk_r2 && abs(ray.y) < halfThick * 2.0)
+            dL = min(dL, halfThickScl * 0.25);
         rk4Step(ray, dL);
 
         vec3 newPos = vec3(ray.x, ray.y, ray.z);
-        if (diskTrans > 0.02 && diskHits < 5 && crossesEquatorialPlane(prevPos, newPos)) {
-            // Emissive colour composited front-to-back; the ray KEEPS going so the
-            // light that loops behind the BH can cross the disk plane again.
-            const float diskAlpha = 0.55;
-            diskAccum += diskTrans * diskShade(diskHitR, diskHitX, diskHitZ);
-            diskTrans *= (1.0 - diskAlpha);
+        // Volumetric disk slab (|y| < halfThick): emission-absorption accumulation,
+        // giving the disk a real vertical extent and a soft edge. The ray keeps
+        // going so the light looping behind the BH still crosses the slab again.
+        float cylR = length(vec2(newPos.x, newPos.z));
+        if (diskTrans > 0.02 && diskHits < 64 &&
+            cylR >= disk_r1 && cylR <= disk_r2 && abs(newPos.y) < halfThick) {
+            float dens = 1.0 - abs(newPos.y) / halfThick;            // peak at midplane
+            float optd = dens * distance(prevPos, newPos) / halfThick;
+            float aSeg = clamp(optd * 2.5, 0.0, 0.9);                // per-segment opacity
+            diskAccum += diskTrans * aSeg * diskShade(cylR, newPos.x, newPos.z);
+            diskTrans *= (1.0 - aSeg);
             ++diskHits;
+            if (diskTrans < 0.02) break;                            // disk went opaque
         }
 
         if (cam.showBeam == 0 && hitSunIndex != -1) {
