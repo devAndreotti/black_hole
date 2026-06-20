@@ -52,10 +52,6 @@ const float U = SagA_rs;
 
 vec4 objectColor = vec4(0.0);
 vec3 hitCenter = vec3(0.0);
-float hitRadius = 0.0;
-float diskHitR  = 0.0;
-float diskHitX  = 0.0;
-float diskHitZ  = 0.0;
 
 // Kerr spin in scaled units: ã = a/r_s = a*·(1/2). a=0 → Schwarzschild.
 float kerrA() { return cam.kerrSpin * 0.5; }
@@ -151,7 +147,6 @@ bool interceptObject(Ray ray) {
         if (distance(P, center) <= radius) {
             objectColor = objColor[i];
             hitCenter = center;
-            hitRadius = radius;
             return true;
         }
     }
@@ -229,15 +224,6 @@ void rk4Step(inout Ray ray, float dL) {
     ray.y = rs_si * cos(ray.theta);
     ray.z = rs_si * sin(ray.theta) * sin(ray.phi);
 }
-bool crossesEquatorialPlane(vec3 oldPos, vec3 newPos) {
-    if (oldPos.y * newPos.y >= 0.0) return false;
-    float t = oldPos.y / (oldPos.y - newPos.y);
-    vec3 hit = mix(oldPos, newPos, t);
-    float r = length(vec2(hit.x, hit.z));
-    if (r >= disk_r1 && r <= disk_r2) { diskHitR = r; diskHitX = hit.x; diskHitZ = hit.z; return true; }
-    return false;
-}
-
 // --- Starfield helpers ---
 float starHash(vec3 p) {
     p = fract(p * vec3(127.1, 311.7, 74.7));
@@ -401,7 +387,6 @@ void main() {
                 hitObject = true;
                 objectColor = objColor[hitSunIndex];
                 hitCenter = objPosRadius[hitSunIndex].xyz;
-                hitRadius = objPosRadius[hitSunIndex].w;
                 ray.x = cam.camPos.x + tSun * dir.x;
                 ray.y = cam.camPos.y + tSun * dir.y;
                 ray.z = cam.camPos.z + tSun * dir.z;
