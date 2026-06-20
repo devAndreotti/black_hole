@@ -224,27 +224,76 @@ void rk4Step(inout Ray ray, float dL) {
     ray.y = rs_si * cos(ray.theta);
     ray.z = rs_si * sin(ray.theta) * sin(ray.phi);
 }
-// --- Starfield helpers ---
+// --- Deep-sky helpers ---
 float starHash(vec3 p) {
     p = fract(p * vec3(127.1, 311.7, 74.7));
     p += dot(p, p.yzx + 19.19);
     return fract(p.x * p.y * p.z * 95.13);
 }
-vec3 starfield(vec3 d) {
-    vec3 col = vec3(0.0);
+// Smooth 3D value noise + fBm for the nebula clouds.
+float hash13(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+float vnoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = hash13(i + vec3(0,0,0)), n100 = hash13(i + vec3(1,0,0));
+    float n010 = hash13(i + vec3(0,1,0)), n110 = hash13(i + vec3(1,1,0));
+    float n001 = hash13(i + vec3(0,0,1)), n101 = hash13(i + vec3(1,0,1));
+    float n011 = hash13(i + vec3(0,1,1)), n111 = hash13(i + vec3(1,1,1));
+    return mix(mix(mix(n000,n100,f.x), mix(n010,n110,f.x), f.y),
+               mix(mix(n001,n101,f.x), mix(n011,n111,f.x), f.y), f.z);
+}
+float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) { v += a * vnoise(p); p *= 2.03; a *= 0.5; }
+    return v;
+}
+
+// Procedural deep sky sampled along the (gravitationally bent) escape direction,
+// so the galactic band and nebulae lens into arcs / Einstein rings near the BH.
+//   • a tilted galactic band: denser stars + a faint glow + a dark dust lane
+//   • coloured nebula clouds (fBm), concentrated toward the band
+//   • three octaves of stars (the original starfield)
+vec3 deepSky(vec3 d) {
+    // Galactic pole tilted well off the Y axis so the band crosses the view
+    // diagonally (and isn't hidden edge-on in the disk plane).
+    const vec3 galN = normalize(vec3(0.62, 0.42, -0.66));
+    float lat  = dot(d, galN);                            // 0 = in the galactic plane
+    float band = exp(-lat*lat / (2.0 * 0.22*0.22));       // soft band envelope
+    float dust = exp(-lat*lat / (2.0 * 0.060*0.060));     // narrow dark dust lane
+
+    // Nebula clouds (fBm), brighter inside the band, tinted across the sky.
+    float neb  = fbm(d * 3.5 + 11.0);
+    neb        = smoothstep(0.46, 0.92, neb) * (0.30 + 0.70 * band);
+    float tsel = fbm(d * 1.7 + 50.0);
+    vec3  nebA = vec3(0.65, 0.12, 0.70);   // magenta / violet
+    vec3  nebB = vec3(0.10, 0.45, 0.78);   // blue / cyan
+    vec3  nebCol = mix(nebA, nebB, smoothstep(0.30, 0.70, tsel)) * neb * 0.85;
+    nebCol *= (1.0 - 0.6 * dust);
+
+    // Diffuse galactic glow, cut by the dust lane.
+    vec3 glow = vec3(0.16, 0.14, 0.20) * band * (1.0 - 0.75 * dust);
+
+    // Stars: three octaves, denser inside the band, dimmed by the dust lane.
+    vec3 stars = vec3(0.0);
     for (int i = 0; i < 3; i++) {
         float scale = float(200 + i * 300);
-        vec3 cell   = floor(d * scale);
+        vec3  cell  = floor(d * scale);
         float h     = starHash(cell);
-        float thresh = 0.994 + float(i) * 0.002;
+        float thresh = 0.994 + float(i) * 0.002 - 0.0035 * band;
         if (h > thresh) {
-            float bright  = (h - thresh) / (1.0 - thresh);
-            float hc      = starHash(cell + vec3(1.0));
-            vec3 starCol  = mix(vec3(1.0, 0.85, 0.70), vec3(0.80, 0.90, 1.0), hc);
-            col += starCol * bright * (1.0 - float(i) * 0.25);
+            float bright = (h - thresh) / (1.0 - thresh);
+            float hc     = starHash(cell + vec3(1.0));
+            stars += mix(vec3(1.0,0.85,0.70), vec3(0.80,0.90,1.0), hc)
+                     * bright * (1.0 - float(i) * 0.25);
         }
     }
-    return min(col, vec3(1.0));
+    stars *= (1.0 - 0.55 * dust);
+
+    return min(stars + nebCol + glow, vec3(1.6));
 }
 vec3 rayCartesianDir(Ray ray) {
     float st = sin(ray.theta), ct = cos(ray.theta);
@@ -425,8 +474,8 @@ void main() {
         bg = vec3(0.0); bgLit = true;            // trapped winding ray → shadow
 
     } else {
-        bg = starfield(rayCartesianDir(ray));
-        bgLit = length(bg) > 0.0;
+        bg = deepSky(rayCartesianDir(ray));
+        bgLit = true;   // the deep sky is always "content" (dark regions stay dark)
     }
 
     vec3 rgb = diskAccum + diskTrans * bg;
