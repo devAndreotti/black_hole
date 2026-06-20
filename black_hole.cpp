@@ -1,5 +1,15 @@
 #include "bh_wallpaper.hpp"  // pulls in bh_engine.hpp → bh_types.hpp + Win32 headers
 
+// On Optimus/PowerXpress laptops, export these symbols so the GPU driver picks
+// the discrete GPU (RTX) instead of the integrated one for this process. The
+// NVIDIA/AMD driver reads them from the executable's export table at startup.
+#ifdef _WIN32
+extern "C" {
+    __declspec(dllexport) DWORD NvOptimusEnablement = 1;
+    __declspec(dllexport) int   AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 // ── Global definitions ──────────────────────────────────────────────────────
 double c = 299792458.0;
 double G = 6.67430e-11;
