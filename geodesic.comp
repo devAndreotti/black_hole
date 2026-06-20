@@ -317,6 +317,10 @@ void main() {
     for (int i = 0; i < steps; ++i) {
         if (intercept(ray)) { hitBlackHole = true; break; }
         float dL = dLambda * clamp(ray.r / 8.0, 1.0, 16.0);
+        // Refine the step through the chaotic photon-sphere shell (Kerr only),
+        // where tiny trajectory changes scatter rays to different destinations →
+        // per-pixel speckle. The legacy/a=0 path is left untouched (already clean).
+        if (useKerr() && ray.r < 4.0) dL *= 0.4;
         rk4Step(ray, dL);
 
         vec3 newPos = vec3(ray.x, ray.y, ray.z);
@@ -413,6 +417,13 @@ void main() {
         float intensity = ambient + (1.0 - ambient) * diff;
         vec3 shaded = objectColor.rgb * intensity;
         color = vec4(shaded, objectColor.a);
+
+    } else if (useKerr() && ray.r < 4.0) {
+        // Kerr: ran out of steps still winding deep in the field → it was going
+        // to be captured. Render as shadow instead of a random escaped direction
+        // (keeps the photon ring clean when the step budget is tight). a=0 path
+        // is untouched so it stays identical to legacy.
+        color = vec4(0.0, 0.0, 0.0, 1.0);
 
     } else {
         vec3 escDir = rayCartesianDir(ray);
