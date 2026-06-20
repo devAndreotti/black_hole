@@ -397,7 +397,13 @@ vec3 jetEmission(vec3 pos) {
     // two-frequency turbulence so it reads as a turbulent plume, not a hard beam
     float turb  = 0.5 + 0.3*sin(ph*3.0 - h*1.4 + flow) + 0.2*sin(ph + h*0.6 - flow*0.7);
     float dens  = radial * heightFade * max(turb, 0.0);
-    vec3  col   = mix(vec3(0.55,0.78,1.0), vec3(0.30,0.50,0.95), clamp((h-3.0)/22.0, 0.0, 1.0));
+    // Jet colour follows the disk colour mode so it matches the scene.
+    int  mode = int(round(diskColor_tint.a));
+    vec3 hot  = (mode == 2) ? vec3(1.00,0.45,0.30)      // --red  → red jet
+              : (mode == 3) ? vec3(0.95,0.97,1.00)      // --white→ white jet
+                            : vec3(0.55,0.78,1.00);     // default→ blue-white
+    vec3 cool = hot * vec3(0.65,0.72,0.95);             // dims toward the tip
+    vec3 col  = mix(hot, cool, clamp((h-3.0)/22.0, 0.0, 1.0));
     return col * dens * spin * 1.8;
 }
 
@@ -416,6 +422,7 @@ void main() {
 
     vec4 color = vec4(0.0);
     vec3 prevPos = vec3(ray.x, ray.y, ray.z);
+    vec3 lastStepDir = dir;   // Cartesian travel dir (finite-difference, stable on the axis)
 
     bool hitBlackHole = false;
     bool hitObject    = false;
@@ -510,6 +517,7 @@ void main() {
             }
         }
 
+        lastStepDir = normalize(newPos - prevPos);   // stable escape direction
         prevPos = newPos;
         if (ray.dr > 0.0 && ray.r > escapeR) { escaped = true; break; }
     }
@@ -527,14 +535,17 @@ void main() {
         float intensity = 0.1 + 0.9 * max(dot(N, V), 0.0);
         bg = objectColor.rgb * intensity; bgLit = true;
 
-    } else if (escaped) {
-        bg = deepSky(rayCartesianDir(ray)); bgLit = true;
+    } else if (escaped || ray.r > 6.0) {
+        // Escaped, OR ran out of steps already out in the weak field (its direction
+        // is settled) — sample the sky. Using the finite-difference travel direction
+        // avoids the polar-axis singularity of the analytic reconstruction (which
+        // drew a bright seam line up the spin axis). The r>6 clause also stops the
+        // big black disk that appeared when zoomed far out.
+        bg = deepSky(lastStepDir); bgLit = true;
 
     } else {
-        // Ran out of steps without escaping → captured, or winding near the photon
-        // sphere / polar axis. Render as shadow instead of sampling a random (now
-        // bright) sky direction — that was the source of the white speckle dots
-        // around the shadow and along the spin axis.
+        // Still deep in the field (r ≤ 6) and not escaping → captured or winding at
+        // the photon sphere. Render as shadow, not a random bright sky sample.
         bg = vec3(0.0); bgLit = true;
     }
 
