@@ -375,6 +375,28 @@ vec3 diskShade(float dhR, float dhX, float dhZ) {
     return diskColor;
 }
 
+// Relativistic polar jet emission at a point (SI Cartesian). Two jets along ±Y
+// (the spin axis), powered by the BH spin (Blandford-Znajek) → intensity ∝ spin,
+// so they only appear once Kerr spin is enabled. Optically thin, emissive.
+vec3 jetEmission(vec3 pos) {
+    float spin = cam.kerrSpin;
+    if (spin < 0.02) return vec3(0.0);
+    float ay = abs(pos.y);
+    float h  = ay / SagA_rs;                          // height above the plane, in r_s
+    if (h < 0.6 || h > 34.0) return vec3(0.0);
+    float jetR = SagA_rs * (0.7 + 0.08 * h);          // widening cone
+    float cylR = length(vec2(pos.x, pos.z));
+    if (cylR > jetR) return vec3(0.0);
+    float radial = 1.0 - cylR / jetR;  radial *= radial;            // bright core
+    float heightFade = smoothstep(34.0, 2.0, h) * smoothstep(0.6, 2.5, h);
+    float flow  = (cam.diskAnim != 0) ? cam.time * 0.6 : 0.0;       // TAA-safe when off
+    float ph    = atan(pos.z, pos.x);
+    float helix = 0.58 + 0.42 * sin(ph * 2.0 - h * 1.2 + flow);     // twisting structure
+    float dens  = radial * heightFade * helix;
+    vec3  col   = mix(vec3(0.55,0.80,1.0), vec3(0.28,0.50,1.0), clamp(h/22.0, 0.0, 1.0));
+    return col * dens * spin * 2.6;
+}
+
 void main() {
     bool moving = cam.moving != 0;
     int WIDTH  = cam.renderWidth;
@@ -455,6 +477,11 @@ void main() {
             ++diskHits;
             if (diskTrans < 0.02) break;                            // disk went opaque
         }
+
+        // Polar jets: optically-thin emission accumulated along the ray (front-to-back).
+        vec3 jet = jetEmission(newPos);
+        if (jet.r + jet.g + jet.b > 0.0)
+            diskAccum += diskTrans * jet * (distance(prevPos, newPos) / SagA_rs) * 0.45;
 
         if (cam.showBeam == 0 && hitSunIndex != -1) {
             float distFromCam = distance(newPos, cam.camPos);
