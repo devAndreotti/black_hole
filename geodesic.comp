@@ -80,9 +80,11 @@ float kerrDphi(float r, float theta, float E, float L, float Q) {
     float ct = cos(theta), st = sin(theta);
     float st2 = max(st*st, 4.0e-4);   // floor sin θ ≈ 0.02 → tames the polar axis
     float S = r*r + a*a*ct*ct;
-    float D = r*r - r + a*a;
+    float D = max(r*r - r + a*a, 1.0e-3);   // floor Δ so a·P/Δ doesn't blow up near r₊
     float P = E*(r*r + a*a) - a*L;
-    return (L/st2 - a*E + a*P/D) / S;
+    // clamp the magnitude too: bounds φ even if a ray skims the horizon (Inf-safe,
+    // unlike isnan() which the driver may optimise away under fast-math).
+    return clamp((L/st2 - a*E + a*P/D) / S, -100.0, 100.0);
 }
 
 // ── initRay: shared Y-polar setup, then per-model conserved quantities ───────
@@ -383,18 +385,20 @@ vec3 jetEmission(vec3 pos) {
     if (spin < 0.02) return vec3(0.0);
     float ay = abs(pos.y);
     float h  = ay / SagA_rs;                          // height above the plane, in r_s
-    if (h < 0.6 || h > 34.0) return vec3(0.0);
-    float jetR = SagA_rs * (0.7 + 0.08 * h);          // widening cone
+    if (h < 3.0 || h > 30.0) return vec3(0.0);        // emanate ABOVE the shadow (~2.6 r_s)
+    float jetR = SagA_rs * (0.6 + 0.22 * (h - 3.0));  // wide flaring cone (a plume, not a line)
     float cylR = length(vec2(pos.x, pos.z));
-    if (cylR > jetR) return vec3(0.0);
-    float radial = 1.0 - cylR / jetR;  radial *= radial;            // bright core
-    float heightFade = smoothstep(34.0, 2.0, h) * smoothstep(0.6, 2.5, h);
+    float rr = cylR / jetR;
+    if (rr > 1.0) return vec3(0.0);
+    float radial = exp(-rr*rr*2.5);                   // soft gaussian core, feathered edge
+    float heightFade = smoothstep(3.0, 5.0, h) * smoothstep(30.0, 8.0, h);  // bright base → fade
     float flow  = (cam.diskAnim != 0) ? cam.time * 0.6 : 0.0;       // TAA-safe when off
     float ph    = atan(pos.z, pos.x);
-    float helix = 0.58 + 0.42 * sin(ph * 2.0 - h * 1.2 + flow);     // twisting structure
-    float dens  = radial * heightFade * helix;
-    vec3  col   = mix(vec3(0.55,0.80,1.0), vec3(0.28,0.50,1.0), clamp(h/22.0, 0.0, 1.0));
-    return col * dens * spin * 2.6;
+    // two-frequency turbulence so it reads as a turbulent plume, not a hard beam
+    float turb  = 0.5 + 0.3*sin(ph*3.0 - h*1.4 + flow) + 0.2*sin(ph + h*0.6 - flow*0.7);
+    float dens  = radial * heightFade * max(turb, 0.0);
+    vec3  col   = mix(vec3(0.55,0.78,1.0), vec3(0.30,0.50,0.95), clamp((h-3.0)/22.0, 0.0, 1.0));
+    return col * dens * spin * 1.8;
 }
 
 void main() {
@@ -535,8 +539,11 @@ void main() {
     }
 
     vec3 rgb = diskAccum + diskTrans * bg;
-    float a  = (diskHits > 0 || bgLit) ? 1.0 : 0.0;
-    color = vec4(rgb, a);
+    // Guard against any NaN/Inf from the Kerr integration (e.g. a ray skimming the
+    // horizon) — otherwise it reads back as a transparent pixel in wallpaper mode.
+    if (any(isnan(rgb)) || any(isinf(rgb))) rgb = vec3(0.0);
+    rgb = min(rgb, vec3(60.0));   // Inf-safe finite clamp (survives fast-math)
+    color = vec4(rgb, 1.0);       // every ray resolves to disk/shadow/object/sky → opaque
 
     vec4 outColor = color;
     if (cam.sampleIndex > 0) {
