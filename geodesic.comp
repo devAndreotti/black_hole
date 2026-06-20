@@ -382,9 +382,22 @@ void main() {
         float D      = 1.0 / (gamma * (1.0 - beta * cosA));
         float D3     = clamp(D * D * D, 0.05, 8.0);
         diskColor   *= D3;
+        // Colour shift from the Doppler factor: approaching side runs hotter
+        // (toward blue-white), receding side cooler (toward red). We raise blue
+        // (and a touch of green) instead of cutting red, so the bright side
+        // whitens rather than turning green.
         float shift  = clamp((D - 1.0) * 0.35, -0.3, 0.3);
-        diskColor.r  = clamp(diskColor.r * (1.0 - shift * 0.35), 0.0, 1.0);
-        diskColor.b  = clamp(diskColor.b + shift * 0.4,           0.0, 1.0);
+        diskColor.b  = clamp(diskColor.b + shift * 0.55, 0.0, 1.0);
+        diskColor.g  = clamp(diskColor.g + shift * 0.15, 0.0, 1.0);
+
+        // Gravitational redshift: photons climbing out of the well lose energy,
+        // so the disk dims and reddens toward the BH. g = √(1 − r_s/r); surface
+        // brightness scales ∝ g³ (Liouville), and the colour shifts red as blue
+        // falls off faster than red.
+        float gr = sqrt(max(1.0 - SagA_rs / diskHitR, 0.0));
+        diskColor   *= clamp(gr*gr*gr, 0.03, 1.0);
+        diskColor.g *= gr;          // green dims faster than red …
+        diskColor.b *= gr*gr;       // … and blue fastest → reddens toward the horizon
 
         color = vec4(diskColor, float(r));
 
