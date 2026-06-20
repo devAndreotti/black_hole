@@ -69,10 +69,21 @@ bool useKerr() { return kerrA() > 1e-6; }
 struct Ray {
     float x, y, z;          // SI Cartesian (for intersection tests)
     float r;                // SCALED radius (units of r_s)
-    float theta, phi;
-    float dr, dtheta, dphi; // scaled velocities (dphi: integrated for legacy)
-    float E, L, Q;          // conserved: energy, axial Lz, Carter (Q used by Kerr)
+    float theta, phi;       // Kerr (Y-polar spherical)
+    float dr, dtheta, dphi; // Kerr velocities (dr also reused as radial-sign for legacy)
+    float E, L, Q;          // Kerr conserved: energy, axial Lz, Carter
+    vec3  cpos, cvel;       // legacy: scaled Cartesian position & velocity (no axis!)
 };
+
+// Cartesian Schwarzschild null-geodesic acceleration (scaled, r_s = 1):
+//   d²r⃗/dλ² = −1.5·|r⃗×v⃗|²·r⃗ / r⁵
+// No spherical coordinates → no polar-axis singularity → no seam. Photon sphere
+// at r=1.5, shadow impact parameter 3√3/2 — same physics as the spherical form.
+vec3 cartAccel(vec3 p, vec3 v) {
+    vec3 h = cross(p, v);
+    float r2 = dot(p, p);
+    return (-1.5 * dot(h, h) / (r2 * r2 * sqrt(r2))) * p;
+}
 
 // dφ/dλ from Kerr conservation (scaled, r_s = 1).
 float kerrDphi(float r, float theta, float E, float L, float Q) {
@@ -97,30 +108,22 @@ Ray initRay(vec3 pos, vec3 dir) {
     ray.x = pos.x; ray.y = pos.y; ray.z = pos.z;   // SI
     float rmag = length(pos);
     ray.r = rmag / U;                               // scaled
-    bool kerr = useKerr();
-    if (kerr) { ray.theta = acos(pos.y / rmag); ray.phi = atan(pos.z, pos.x); }
-    else      { ray.theta = acos(pos.z / rmag); ray.phi = atan(pos.y, pos.x); }
-
-    float r = ray.r, th = ray.theta;
-    float st = sin(th), ct = cos(th);
-    float sp = sin(ray.phi), cp = cos(ray.phi);
-    float st2 = max(st*st, 4.0e-4);
-    float sth = max(st, 0.02);        // clamped sin θ for the φ denominator
-
-    float dx = dir.x, dy = dir.y, dz = dir.z;
-    if (kerr) {                                       // Y-polar Jacobian
-        ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
-        ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
-        ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
-    } else {                                          // Z-polar Jacobian
-        ray.dr     =  st*cp*dx + st*sp*dy + ct*dz;
-        ray.dtheta = (ct*cp*dx + ct*sp*dy - st*dz) / r;
-        ray.dphi   = (-sp*dx + cp*dy) / (r * sth);
-    }
     ray.Q = 0.0;
 
     if (useKerr()) {
-        // Kerr: conserved E, Lz, Q from the null condition (covariant metric, r_s=1)
+        // Kerr: Y-polar spherical (spin axis = Y). Conserved E, Lz, Q from the
+        // null condition (covariant metric, r_s = 1).
+        ray.theta = acos(pos.y / rmag);
+        ray.phi   = atan(pos.z, pos.x);
+        float r = ray.r, th = ray.theta;
+        float st = sin(th), ct = cos(th);
+        float sp = sin(ray.phi), cp = cos(ray.phi);
+        float st2 = max(st*st, 4.0e-4);
+        float sth = max(st, 0.02);
+        float dx = dir.x, dy = dir.y, dz = dir.z;
+        ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
+        ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
+        ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
         float a = kerrA();
         float S = r*r + a*a*ct*ct;
         float D = r*r - r + a*a;
@@ -138,11 +141,10 @@ Ray initRay(vec3 pos, vec3 dir) {
         float pth = gthth * ray.dtheta;
         ray.Q = pth*pth + ct*ct*(ray.L*ray.L/st2 - a*a*ray.E*ray.E);
     } else {
-        // Legacy Schwarzschild (matches --legacy): E = f·(dt/dλ), r_s = 1
-        ray.L = ray.r * ray.r * st * ray.dphi;
-        float f = 1.0 - 1.0/ray.r;
-        float dt_dL = sqrt((ray.dr*ray.dr)/f + ray.r*ray.r*(ray.dtheta*ray.dtheta + st*st*ray.dphi*ray.dphi));
-        ray.E = f * dt_dL;
+        // Legacy Schwarzschild: pure Cartesian — no spherical coords, no axis seam.
+        ray.cpos = pos / U;          // scaled position
+        ray.cvel = dir;              // unit direction (affine velocity)
+        ray.dr   = dot(ray.cpos, ray.cvel);   // radial-velocity sign (for escape test)
     }
     return ray;
 }
@@ -204,43 +206,48 @@ void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
     }
 }
 
-// Single RK4 integrating r, θ, φ, dr, dθ, dφ. For Kerr, d2.z=0 so dφ stays put
-// and the φ velocity comes from kerrDphi via d1.z each substep.
 void rk4Step(inout Ray ray, float dL) {
-    vec3 k1a, k1b, k2a, k2b, k3a, k3b, k4a, k4b;
-    Ray tmp;
-
-    geodesicRHS(ray, k1a, k1b);
-
-    tmp = ray;
-    tmp.r += 0.5*dL*k1a.x; tmp.theta += 0.5*dL*k1a.y; tmp.phi += 0.5*dL*k1a.z;
-    tmp.dr += 0.5*dL*k1b.x; tmp.dtheta += 0.5*dL*k1b.y; tmp.dphi += 0.5*dL*k1b.z;
-    geodesicRHS(tmp, k2a, k2b);
-
-    tmp = ray;
-    tmp.r += 0.5*dL*k2a.x; tmp.theta += 0.5*dL*k2a.y; tmp.phi += 0.5*dL*k2a.z;
-    tmp.dr += 0.5*dL*k2b.x; tmp.dtheta += 0.5*dL*k2b.y; tmp.dphi += 0.5*dL*k2b.z;
-    geodesicRHS(tmp, k3a, k3b);
-
-    tmp = ray;
-    tmp.r += dL*k3a.x; tmp.theta += dL*k3a.y; tmp.phi += dL*k3a.z;
-    tmp.dr += dL*k3b.x; tmp.dtheta += dL*k3b.y; tmp.dphi += dL*k3b.z;
-    geodesicRHS(tmp, k4a, k4b);
-
-    ray.r      += dL/6.0 * (k1a.x + 2.0*k2a.x + 2.0*k3a.x + k4a.x);
-    ray.theta  += dL/6.0 * (k1a.y + 2.0*k2a.y + 2.0*k3a.y + k4a.y);
-    ray.phi    += dL/6.0 * (k1a.z + 2.0*k2a.z + 2.0*k3a.z + k4a.z);
-    ray.dr     += dL/6.0 * (k1b.x + 2.0*k2b.x + 2.0*k3b.x + k4b.x);
-    ray.dtheta += dL/6.0 * (k1b.y + 2.0*k2b.y + 2.0*k3b.y + k4b.y);
-    ray.dphi   += dL/6.0 * (k1b.z + 2.0*k2b.z + 2.0*k3b.z + k4b.z);
-
-    float rs_si = ray.r * U;
-    float st = sin(ray.theta), ct = cos(ray.theta);
-    float cp = cos(ray.phi),   sp = sin(ray.phi);
-    if (useKerr()) {            // Y-polar: y = r·cosθ
-        ray.x = rs_si*st*cp; ray.y = rs_si*ct;    ray.z = rs_si*st*sp;
-    } else {                    // Z-polar: z = r·cosθ  (original convention)
-        ray.x = rs_si*st*cp; ray.y = rs_si*st*sp; ray.z = rs_si*ct;
+    if (useKerr()) {
+        // Kerr: spherical RK4 over (r, θ, φ, dr, dθ, dφ). d2.z=0 → dφ from kerrDphi.
+        vec3 k1a, k1b, k2a, k2b, k3a, k3b, k4a, k4b;
+        Ray tmp;
+        geodesicRHS(ray, k1a, k1b);
+        tmp = ray;
+        tmp.r += 0.5*dL*k1a.x; tmp.theta += 0.5*dL*k1a.y; tmp.phi += 0.5*dL*k1a.z;
+        tmp.dr += 0.5*dL*k1b.x; tmp.dtheta += 0.5*dL*k1b.y; tmp.dphi += 0.5*dL*k1b.z;
+        geodesicRHS(tmp, k2a, k2b);
+        tmp = ray;
+        tmp.r += 0.5*dL*k2a.x; tmp.theta += 0.5*dL*k2a.y; tmp.phi += 0.5*dL*k2a.z;
+        tmp.dr += 0.5*dL*k2b.x; tmp.dtheta += 0.5*dL*k2b.y; tmp.dphi += 0.5*dL*k2b.z;
+        geodesicRHS(tmp, k3a, k3b);
+        tmp = ray;
+        tmp.r += dL*k3a.x; tmp.theta += dL*k3a.y; tmp.phi += dL*k3a.z;
+        tmp.dr += dL*k3b.x; tmp.dtheta += dL*k3b.y; tmp.dphi += dL*k3b.z;
+        geodesicRHS(tmp, k4a, k4b);
+        ray.r      += dL/6.0 * (k1a.x + 2.0*k2a.x + 2.0*k3a.x + k4a.x);
+        ray.theta  += dL/6.0 * (k1a.y + 2.0*k2a.y + 2.0*k3a.y + k4a.y);
+        ray.phi    += dL/6.0 * (k1a.z + 2.0*k2a.z + 2.0*k3a.z + k4a.z);
+        ray.dr     += dL/6.0 * (k1b.x + 2.0*k2b.x + 2.0*k3b.x + k4b.x);
+        ray.dtheta += dL/6.0 * (k1b.y + 2.0*k2b.y + 2.0*k3b.y + k4b.y);
+        ray.dphi   += dL/6.0 * (k1b.z + 2.0*k2b.z + 2.0*k3b.z + k4b.z);
+        float rs_si = ray.r * U;
+        float st = sin(ray.theta), ct = cos(ray.theta);
+        float cp = cos(ray.phi),   sp = sin(ray.phi);
+        ray.x = rs_si*st*cp; ray.y = rs_si*ct; ray.z = rs_si*st*sp;   // Y-polar
+    } else {
+        // Legacy Schwarzschild: Cartesian RK4 over (cpos, cvel). No spherical
+        // coords → no axis singularity → no seam.
+        vec3 p = ray.cpos, v = ray.cvel;
+        vec3 k1p = v,             k1v = cartAccel(p, v);
+        vec3 k2p = v+0.5*dL*k1v,  k2v = cartAccel(p+0.5*dL*k1p, v+0.5*dL*k1v);
+        vec3 k3p = v+0.5*dL*k2v,  k3v = cartAccel(p+0.5*dL*k2p, v+0.5*dL*k2v);
+        vec3 k4p = v+dL*k3v,      k4v = cartAccel(p+dL*k3p,     v+dL*k3v);
+        ray.cpos = p + dL/6.0*(k1p + 2.0*k2p + 2.0*k3p + k4p);
+        ray.cvel = v + dL/6.0*(k1v + 2.0*k2v + 2.0*k3v + k4v);
+        ray.r  = length(ray.cpos);
+        ray.dr = dot(ray.cpos, ray.cvel);            // radial-velocity sign
+        vec3 si = ray.cpos * U;
+        ray.x = si.x; ray.y = si.y; ray.z = si.z;    // SI world
     }
 }
 // --- Deep-sky helpers ---
