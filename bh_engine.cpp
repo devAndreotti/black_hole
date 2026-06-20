@@ -449,8 +449,18 @@ void Engine::uploadObjectsUBO(const vector<ObjectData>& objs) {
 }
 
 void Engine::uploadDiskUBO() {
-    float r1 = showDisk ? float(SagA.r_s * 2.2) : 0.0f;
-    float r2 = showDisk ? float(SagA.r_s * 5.2) : 0.0f;
+    // Inner edge follows the Kerr prograde ISCO. At a*=0 it stays at the artistic
+    // 2.2 r_s (the legacy look); as spin rises the ISCO shrinks (rÍSCO/6M ratio),
+    // so the disk creeps toward the BH. Clamped just outside the horizon.
+    double a = std::clamp((double)kerrSpin, 0.0, 0.998);
+    double Z1 = 1.0 + std::cbrt(1.0 - a*a) * (std::cbrt(1.0 + a) + std::cbrt(1.0 - a));
+    double Z2 = std::sqrt(3.0*a*a + Z1*Z1);
+    double iscoM = 3.0 + Z2 - std::sqrt(std::max(0.0, (3.0 - Z1)*(3.0 + Z1 + 2.0*Z2))); // units of M
+    double inner = 2.2 * (iscoM / 6.0);                       // r_s units, =2.2 at a=0
+    double rplus = 0.5 * (1.0 + std::sqrt(std::max(0.0, 1.0 - a*a)));
+    inner = std::max(inner, rplus * 1.1);                     // stay outside the horizon
+    float r1 = showDisk ? float(SagA.r_s * inner) : 0.0f;
+    float r2 = showDisk ? float(SagA.r_s * 5.2)   : 0.0f;
     struct DiskData { float r1, r2, num, thickness; vec4 color_tint; }
     data = { r1, r2, 2.0f, 1e9f, diskColorTint };
     glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
