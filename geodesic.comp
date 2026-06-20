@@ -78,7 +78,7 @@ struct Ray {
 float kerrDphi(float r, float theta, float E, float L, float Q) {
     float a  = kerrA();
     float ct = cos(theta), st = sin(theta);
-    float st2 = max(st*st, 1e-8);
+    float st2 = max(st*st, 4.0e-4);   // floor sin θ ≈ 0.02 → tames the polar axis
     float S = r*r + a*a*ct*ct;
     float D = r*r - r + a*a;
     float P = E*(r*r + a*a) - a*L;
@@ -97,12 +97,13 @@ Ray initRay(vec3 pos, vec3 dir) {
     float r = ray.r, th = ray.theta;
     float st = sin(th), ct = cos(th);
     float sp = sin(ray.phi), cp = cos(ray.phi);
-    float st2 = max(st*st, 1e-8);
+    float st2 = max(st*st, 4.0e-4);
+    float sth = max(st, 0.02);        // clamped sin θ for the φ denominator
 
     float dx = dir.x, dy = dir.y, dz = dir.z;
     ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
     ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
-    ray.dphi   = (-sp*dx + cp*dz) / (r * st);
+    ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
     ray.Q = 0.0;
 
     if (useKerr()) {
@@ -162,13 +163,14 @@ void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
 
     if (useKerr()) {
         float a = kerrA();
-        float st2 = max(st*st, 1e-8);
+        float sth = max(st, 0.02);           // clamped sin θ (polar-axis safety)
+        float st2 = sth*sth;
         float S = r*r + a*a*ct*ct;
         float D = r*r - r + a*a;
         float P = ray.E*(r*r + a*a) - a*ray.L;
         float LaE = ray.L - a*ray.E;
         float dR  = 4.0*r*ray.E*P - (2.0*r - 1.0)*(LaE*LaE + ray.Q);
-        float dTh = 2.0*ct*(ray.L*ray.L/(st2*st) - a*a*ray.E*ray.E*st);
+        float dTh = 2.0*ct*(ray.L*ray.L/(st2*sth) - a*a*ray.E*ray.E*st);
         float dS  = 2.0*r*dr - 2.0*a*a*ct*st*dtheta;
         float S2  = S*S;
         float pr_acc  = dR/(2.0*S2) - dS*dr/S;
@@ -185,7 +187,7 @@ void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
              + (1.0 / (2.0 * r*r * f)) * dr * dr
              + r * (dtheta*dtheta + st*st*dphi*dphi);
         d2.y = -2.0*dr*dtheta/r + st*ct*dphi*dphi;
-        d2.z = -2.0*dr*dphi/r - 2.0*ct/st * dtheta * dphi;
+        d2.z = -2.0*dr*dphi/r - 2.0*ct/max(st, 0.02) * dtheta * dphi;
     }
 }
 
@@ -368,6 +370,7 @@ void main() {
 
     bool hitBlackHole = false;
     bool hitObject    = false;
+    bool escaped      = false;   // true only when the ray cleanly reaches infinity
     // Front-to-back accumulation of the (semi-transparent, emissive) disk, so the
     // lensed secondary/tertiary images — the disk wrapping over and under the
     // shadow — composite in instead of only the first crossing being shown.
@@ -454,7 +457,7 @@ void main() {
         }
 
         prevPos = newPos;
-        if (ray.dr > 0.0 && ray.r > escapeR) break;
+        if (ray.dr > 0.0 && ray.r > escapeR) { escaped = true; break; }
     }
 
     // Background behind the accumulated disk: shadow, lensed sun, or starfield.
@@ -470,12 +473,15 @@ void main() {
         float intensity = 0.1 + 0.9 * max(dot(N, V), 0.0);
         bg = objectColor.rgb * intensity; bgLit = true;
 
-    } else if (useKerr() && ray.r < 4.0) {
-        bg = vec3(0.0); bgLit = true;            // trapped winding ray → shadow
+    } else if (escaped) {
+        bg = deepSky(rayCartesianDir(ray)); bgLit = true;
 
     } else {
-        bg = deepSky(rayCartesianDir(ray));
-        bgLit = true;   // the deep sky is always "content" (dark regions stay dark)
+        // Ran out of steps without escaping → captured, or winding near the photon
+        // sphere / polar axis. Render as shadow instead of sampling a random (now
+        // bright) sky direction — that was the source of the white speckle dots
+        // around the shadow and along the spin axis.
+        bg = vec3(0.0); bgLit = true;
     }
 
     vec3 rgb = diskAccum + diskTrans * bg;
