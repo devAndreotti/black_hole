@@ -271,6 +271,50 @@ vec3 rayCartesianDir(Ray ray) {
     ));
 }
 
+// Emissive colour of the accretion disk at an equatorial hit point (cylindrical
+// radius dhR, plane coords dhX/dhZ). Includes the radial tint, optional Keplerian
+// animation, relativistic Doppler beaming, and gravitational redshift. Evaluated
+// at every plane crossing so the lensed secondary image can be composited.
+vec3 diskShade(float dhR, float dhX, float dhZ) {
+    float r = dhR / disk_r2;
+    vec3 diskColor;
+    int mode = int(round(diskColor_tint.a));
+    if (mode == 2) {
+        diskColor = vec3(1.0 - 0.5*r, 0.1*(1.0 - r), 0.1*(1.0 - r));
+    } else if (mode == 3) {
+        float val = 1.0 - 0.5*r;
+        diskColor = vec3(val, val, val + 0.05*(1.0 - r));
+    } else {
+        diskColor = vec3(1.0, r, 0.2);
+    }
+
+    if (cam.diskAnim != 0) {
+        float omega   = 0.5 * pow(disk_r2 / max(dhR, 1.0), 1.5);
+        float matPhi  = atan(dhZ, dhX) - cam.time * omega;
+        float pattern = 0.55 + 0.45 * cos(matPhi * 6.0 + r * 3.14159);
+        diskColor    *= pattern;
+    }
+
+    // Relativistic Doppler beaming (Keplerian prograde orbit)
+    float beta   = clamp(sqrt(SagA_rs / (2.0 * dhR)), 0.0, 0.95);
+    vec3  velDir = normalize(vec3(-dhZ, 0.0, dhX));
+    vec3  viewDir = normalize(cam.camPos - vec3(dhX, 0.0, dhZ));
+    float cosA   = dot(velDir, viewDir);
+    float gamma  = 1.0 / sqrt(1.0 - beta * beta);
+    float D      = 1.0 / (gamma * (1.0 - beta * cosA));
+    diskColor   *= clamp(D*D*D, 0.05, 8.0);
+    float shift  = clamp((D - 1.0) * 0.35, -0.3, 0.3);
+    diskColor.b  = clamp(diskColor.b + shift * 0.55, 0.0, 1.0);
+    diskColor.g  = clamp(diskColor.g + shift * 0.15, 0.0, 1.0);
+
+    // Gravitational redshift (dims + reddens toward the horizon)
+    float gr = sqrt(max(1.0 - SagA_rs / dhR, 0.0));
+    diskColor   *= clamp(gr*gr*gr, 0.03, 1.0);
+    diskColor.g *= gr;
+    diskColor.b *= gr*gr;
+    return diskColor;
+}
+
 void main() {
     bool moving = cam.moving != 0;
     int WIDTH  = cam.renderWidth;
@@ -288,8 +332,13 @@ void main() {
     vec3 prevPos = vec3(ray.x, ray.y, ray.z);
 
     bool hitBlackHole = false;
-    bool hitDisk      = false;
     bool hitObject    = false;
+    // Front-to-back accumulation of the (semi-transparent, emissive) disk, so the
+    // lensed secondary/tertiary images — the disk wrapping over and under the
+    // shadow — composite in instead of only the first crossing being shown.
+    vec3  diskAccum = vec3(0.0);
+    float diskTrans = 1.0;   // remaining transmittance toward the background
+    int   diskHits  = 0;
 
     // --- Straight-line suns intersection if showBeam is disabled ---
     float tSun = 1e30;
@@ -324,7 +373,14 @@ void main() {
         rk4Step(ray, dL);
 
         vec3 newPos = vec3(ray.x, ray.y, ray.z);
-        if (crossesEquatorialPlane(prevPos, newPos)) { hitDisk = true; break; }
+        if (diskTrans > 0.02 && diskHits < 5 && crossesEquatorialPlane(prevPos, newPos)) {
+            // Emissive colour composited front-to-back; the ray KEEPS going so the
+            // light that loops behind the BH can cross the disk plane again.
+            const float diskAlpha = 0.55;
+            diskAccum += diskTrans * diskShade(diskHitR, diskHitX, diskHitZ);
+            diskTrans *= (1.0 - diskAlpha);
+            ++diskHits;
+        }
 
         if (cam.showBeam == 0 && hitSunIndex != -1) {
             float distFromCam = distance(newPos, cam.camPos);
@@ -354,82 +410,30 @@ void main() {
         if (ray.dr > 0.0 && ray.r > escapeR) break;
     }
 
-    if (hitDisk) {
-        double r = double(diskHitR) / disk_r2;
-        vec3 diskColor;
-        int mode = int(round(diskColor_tint.a));
-        if (mode == 2) {
-            float redVal = 1.0f - 0.5f * float(r);
-            float gbVal = 0.1f * (1.0f - float(r));
-            diskColor = vec3(redVal, gbVal, gbVal);
-        } else if (mode == 3) {
-            float val = 1.0f - 0.5f * float(r);
-            diskColor = vec3(val, val, val + 0.05f * (1.0f - float(r)));
-        } else {
-            diskColor = vec3(1.0f, float(r), 0.2f);
-        }
-
-        // --- Keplerian disk animation (ω ∝ r^-3/2, normalized to a visible rate) ---
-        if (cam.diskAnim != 0) {
-            float omega   = 0.5 * pow(disk_r2 / max(diskHitR, 1.0), 1.5);
-            float matPhi  = atan(diskHitZ, diskHitX) - cam.time * omega;
-            float pattern = 0.55 + 0.45 * cos(matPhi * 6.0 + float(r) * 3.14159);
-            diskColor    *= pattern;
-        }
-
-        // Relativistic Doppler beaming: Keplerian prograde orbit (CCW from +y)
-        float beta   = clamp(sqrt(SagA_rs / (2.0 * diskHitR)), 0.0, 0.95);
-        vec3  velDir = normalize(vec3(-diskHitZ, 0.0, diskHitX));
-        vec3  viewDir = normalize(cam.camPos - vec3(diskHitX, 0.0, diskHitZ));
-        float cosA   = dot(velDir, viewDir);
-        float gamma  = 1.0 / sqrt(1.0 - beta * beta);
-        float D      = 1.0 / (gamma * (1.0 - beta * cosA));
-        float D3     = clamp(D * D * D, 0.05, 8.0);
-        diskColor   *= D3;
-        // Colour shift from the Doppler factor: approaching side runs hotter
-        // (toward blue-white), receding side cooler (toward red). We raise blue
-        // (and a touch of green) instead of cutting red, so the bright side
-        // whitens rather than turning green.
-        float shift  = clamp((D - 1.0) * 0.35, -0.3, 0.3);
-        diskColor.b  = clamp(diskColor.b + shift * 0.55, 0.0, 1.0);
-        diskColor.g  = clamp(diskColor.g + shift * 0.15, 0.0, 1.0);
-
-        // Gravitational redshift: photons climbing out of the well lose energy,
-        // so the disk dims and reddens toward the BH. g = √(1 − r_s/r); surface
-        // brightness scales ∝ g³ (Liouville), and the colour shifts red as blue
-        // falls off faster than red.
-        float gr = sqrt(max(1.0 - SagA_rs / diskHitR, 0.0));
-        diskColor   *= clamp(gr*gr*gr, 0.03, 1.0);
-        diskColor.g *= gr;          // green dims faster than red …
-        diskColor.b *= gr*gr;       // … and blue fastest → reddens toward the horizon
-
-        color = vec4(diskColor, float(r));
-
-    } else if (hitBlackHole) {
-        color = vec4(0.0, 0.0, 0.0, 1.0);
+    // Background behind the accumulated disk: shadow, lensed sun, or starfield.
+    vec3 bg = vec3(0.0);
+    bool bgLit = false;
+    if (hitBlackHole) {
+        bg = vec3(0.0); bgLit = true;            // opaque shadow
 
     } else if (hitObject) {
         vec3 P = vec3(ray.x, ray.y, ray.z);
         vec3 N = normalize(P - hitCenter);
         vec3 V = normalize(cam.camPos - P);
-        float ambient = 0.1;
-        float diff = max(dot(N, V), 0.0);
-        float intensity = ambient + (1.0 - ambient) * diff;
-        vec3 shaded = objectColor.rgb * intensity;
-        color = vec4(shaded, objectColor.a);
+        float intensity = 0.1 + 0.9 * max(dot(N, V), 0.0);
+        bg = objectColor.rgb * intensity; bgLit = true;
 
     } else if (useKerr() && ray.r < 4.0) {
-        // Kerr: ran out of steps still winding deep in the field → it was going
-        // to be captured. Render as shadow instead of a random escaped direction
-        // (keeps the photon ring clean when the step budget is tight). a=0 path
-        // is untouched so it stays identical to legacy.
-        color = vec4(0.0, 0.0, 0.0, 1.0);
+        bg = vec3(0.0); bgLit = true;            // trapped winding ray → shadow
 
     } else {
-        vec3 escDir = rayCartesianDir(ray);
-        vec3 stars  = starfield(escDir);
-        color = vec4(stars, float(length(stars) > 0.0));
+        bg = starfield(rayCartesianDir(ray));
+        bgLit = length(bg) > 0.0;
     }
+
+    vec3 rgb = diskAccum + diskTrans * bg;
+    float a  = (diskHits > 0 || bgLit) ? 1.0 : 0.0;
+    color = vec4(rgb, a);
 
     vec4 outColor = color;
     if (cam.sampleIndex > 0) {
