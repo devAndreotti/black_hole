@@ -67,12 +67,11 @@ bool useKerr() { return kerrA() > 1e-6; }
 // ────────────────────────────────────────────────────────────────────────────
 
 struct Ray {
-    float x, y, z;          // SI Cartesian (for intersection tests)
-    float r;                // SCALED radius (units of r_s)
-    float theta, phi;       // Kerr (Y-polar spherical)
-    float dr, dtheta, dphi; // Kerr velocities (dr also reused as radial-sign for legacy)
-    float E, L, Q;          // Kerr conserved: energy, axial Lz, Carter
-    vec3  cpos, cvel;       // legacy: scaled Cartesian position & velocity (no axis!)
+    float x, y, z;    // SI Cartesian (for intersection tests)
+    float r;          // SCALED radius: |cpos| (Schwarzschild) or Kerr-radius (Kerr)
+    float dr;         // radial-velocity sign (for the escape test)
+    float E;          // Kerr conserved energy (Kerr-Schild Hamiltonian)
+    vec3  cpos, cvel; // scaled position; velocity (Schwarzschild) | covariant momentum (Kerr)
 };
 
 // Cartesian Schwarzschild null-geodesic acceleration (scaled, r_s = 1):
@@ -85,61 +84,70 @@ vec3 cartAccel(vec3 p, vec3 v) {
     return (-1.5 * dot(h, h) / (r2 * r2 * sqrt(r2))) * p;
 }
 
-// dφ/dλ from Kerr conservation (scaled, r_s = 1).
-float kerrDphi(float r, float theta, float E, float L, float Q) {
-    float a  = kerrA();
-    float ct = cos(theta), st = sin(theta);
-    float st2 = max(st*st, 4.0e-4);   // floor sin θ ≈ 0.02 → tames the polar axis
-    float S = r*r + a*a*ct*ct;
-    float D = max(r*r - r + a*a, 1.0e-3);   // floor Δ so a·P/Δ doesn't blow up near r₊
-    float P = E*(r*r + a*a) - a*L;
-    // clamp the magnitude too: bounds φ even if a ray skims the horizon (Inf-safe,
-    // unlike isnan() which the driver may optimise away under fast-math).
-    return clamp((L/st2 - a*E + a*P/D) / S, -100.0, 100.0);
+// ── Kerr-Schild Cartesian (spin axis = Y, scaled r_s = 1) ────────────────────
+// Kerr geodesics as a Hamiltonian flow in CARTESIAN coords → no spherical polar
+// axis → no seam, even with spin. State = position x⃗ + covariant spatial momentum
+// p⃗; energy E conserved. Metric g_μν = η_μν + f·l_μl_ν (Kerr-Schild form).
+float ksRadius(vec3 P, float a) {           // Kerr radius from Cartesian (axial = y)
+    float a2 = a*a;
+    float t  = dot(P,P) - a2;
+    return sqrt(max(0.5*(t + sqrt(t*t + 4.0*a2*P.y*P.y)), 1.0e-6));
+}
+vec3 ksLs(vec3 P, float r, float a) {       // spatial covariant null vector (|l|=1)
+    float d = r*r + a*a;
+    return vec3((r*P.x + a*P.z)/d, P.y/r, (r*P.z - a*P.x)/d);
+}
+float ksF(vec3 P, float r, float a) {       // Kerr-Schild scalar (r_s = 1)
+    return r*r*r / (r*r*r*r + a*a*P.y*P.y);
+}
+// Φ(x) = f·(E + l·p)²  — the only x-dependent piece of the null Hamiltonian 2H.
+float ksPhi(vec3 P, vec3 p, float E, float a) {
+    float r = ksRadius(P, a);
+    float q = E + dot(ksLs(P, r, a), p);
+    return ksF(P, r, a) * q * q;
+}
+// Hamilton's equations: dx = ∂H/∂p, dp = −∂H/∂x (the x-derivative via finite diff).
+void ksRHS(vec3 x, vec3 p, float E, float a, out vec3 dx, out vec3 dp) {
+    float r = ksRadius(x, a);
+    vec3  l = ksLs(x, r, a);
+    float f = ksF(x, r, a);
+    float q = E + dot(l, p);
+    dx = p - f*q*l;                          // dxⁱ/dλ = gⁱᵛ pᵥ
+    float e = 1.0e-3 * max(r, 1.0);          // dpᵢ/dλ = ½ ∂Φ/∂xⁱ  (central difference)
+    dp = 0.5 * vec3(
+        ksPhi(x+vec3(e,0,0),p,E,a) - ksPhi(x-vec3(e,0,0),p,E,a),
+        ksPhi(x+vec3(0,e,0),p,E,a) - ksPhi(x-vec3(0,e,0),p,E,a),
+        ksPhi(x+vec3(0,0,e),p,E,a) - ksPhi(x-vec3(0,0,e),p,E,a)) / (2.0*e);
 }
 
 // ── initRay: per-model coordinate convention, then conserved quantities ──────
 // Kerr → Y-polar (spin axis = Y, physically required). Legacy/Schwarzschild →
-// Z-polar (the original code's convention): spherical symmetry makes the axis
-// free, and Z keeps the coordinate seam OUT of the vertical centre of the view
-// (Y-polar put a seam straight up/down the image through the shadow).
+// Both models integrate in CARTESIAN coordinates (no spherical polar axis → no
+// seam): Schwarzschild via cartAccel, Kerr via the Kerr-Schild Hamiltonian flow.
 Ray initRay(vec3 pos, vec3 dir) {
     Ray ray;
     ray.x = pos.x; ray.y = pos.y; ray.z = pos.z;   // SI
     float rmag = length(pos);
     ray.r = rmag / U;                               // scaled
-    ray.Q = 0.0;
 
     if (useKerr()) {
-        // Kerr: Y-polar spherical (spin axis = Y). Conserved E, Lz, Q from the
-        // null condition (covariant metric, r_s = 1).
-        ray.theta = acos(pos.y / rmag);
-        ray.phi   = atan(pos.z, pos.x);
-        float r = ray.r, th = ray.theta;
-        float st = sin(th), ct = cos(th);
-        float sp = sin(ray.phi), cp = cos(ray.phi);
-        float st2 = max(st*st, 4.0e-4);
-        float sth = max(st, 0.02);
-        float dx = dir.x, dy = dir.y, dz = dir.z;
-        ray.dr     =  st*cp*dx + ct*dy + st*sp*dz;
-        ray.dtheta = (ct*cp*dx - st*dy + ct*sp*dz) / r;
-        ray.dphi   = (-sp*dx + cp*dz) / (r * sth);
+        // Kerr-Schild Cartesian init. Set p^i = dir, solve the null condition for
+        // p^t, then lower to covariant p (so dx/dλ = dir exactly at the camera).
         float a = kerrA();
-        float S = r*r + a*a*ct*ct;
-        float D = r*r - r + a*a;
-        float gtt = -(1.0 - r/S);
-        float grr = S/D;
-        float gthth = S;
-        float gpp = (r*r + a*a + r*a*a*st2/S) * st2;
-        float gtp = -r*a*st2/S;
-        float spatial = grr*ray.dr*ray.dr + gthth*ray.dtheta*ray.dtheta + gpp*ray.dphi*ray.dphi;
-        float disc = gtp*ray.dphi*gtp*ray.dphi - gtt*spatial;
-        disc = max(disc, 0.0);
-        float dt = (-gtp*ray.dphi - sqrt(disc)) / gtt;
-        ray.E = -(gtt*dt + gtp*ray.dphi);
-        ray.L =  (gtp*dt + gpp*ray.dphi);
-        float pth = gthth * ray.dtheta;
-        ray.Q = pth*pth + ct*ct*(ray.L*ray.L/st2 - a*a*ray.E*ray.E);
+        vec3  cp = pos / U;
+        float r0 = ksRadius(cp, a);
+        vec3  l0 = ksLs(cp, r0, a);
+        float f0 = ksF(cp, r0, a);
+        float m  = dot(l0, dir);
+        float A = f0 - 1.0, B = 2.0*f0*m, C = f0*m*m + 1.0;
+        float disc = max(B*B - 4.0*A*C, 0.0);
+        float pt = (-B - sqrt(disc)) / (2.0*A);
+        if (pt < 0.0) pt = (-B + sqrt(disc)) / (2.0*A);   // future-directed
+        ray.cpos = cp;
+        ray.cvel = dir + f0*(pt+m)*l0;          // covariant spatial momentum p⃗
+        ray.E    = pt - f0*(pt+m);
+        ray.r    = r0;
+        ray.dr   = dot(cp, dir);                // radial-velocity sign (dx≈dir at start)
     } else {
         // Legacy Schwarzschild: pure Cartesian — no spherical coords, no axis seam.
         ray.cpos = pos / U;          // scaled position
@@ -169,71 +177,23 @@ bool interceptObject(Ray ray) {
     return false;
 }
 
-// ── geodesicRHS: branches between legacy Schwarzschild and Kerr ───────────────
-// d1 = (dr, dθ, dφ)/dλ ;  d2 = (d²r, d²θ, d²φ)/dλ²  (d2.z=0 for Kerr: dφ algebraic)
-void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
-    float r = ray.r, th = ray.theta;
-    float dr = ray.dr, dtheta = ray.dtheta;
-    float st = sin(th), ct = cos(th);
-
-    if (useKerr()) {
-        float a = kerrA();
-        float sth = max(st, 0.02);           // clamped sin θ (polar-axis safety)
-        float st2 = sth*sth;
-        float S = r*r + a*a*ct*ct;
-        float D = r*r - r + a*a;
-        float P = ray.E*(r*r + a*a) - a*ray.L;
-        float LaE = ray.L - a*ray.E;
-        float dR  = 4.0*r*ray.E*P - (2.0*r - 1.0)*(LaE*LaE + ray.Q);
-        float dTh = 2.0*ct*(ray.L*ray.L/(st2*sth) - a*a*ray.E*ray.E*st);
-        float dS  = 2.0*r*dr - 2.0*a*a*ct*st*dtheta;
-        float S2  = S*S;
-        float pr_acc  = dR/(2.0*S2) - dS*dr/S;
-        float pth_acc = dTh/(2.0*S2) - dS*dtheta/S;
-        d1 = vec3(dr, dtheta, kerrDphi(r, th, ray.E, ray.L, ray.Q));
-        d2 = vec3(pr_acc, pth_acc, 0.0);
-    } else {
-        // Legacy Schwarzschild (Christoffel), scaled r_s = 1. Identical to --legacy.
-        float dphi = ray.dphi;
-        float f = 1.0 - 1.0/r;
-        float dt_dL = ray.E / f;
-        d1 = vec3(dr, dtheta, dphi);
-        d2.x = - (1.0 / (2.0 * r*r)) * f * dt_dL * dt_dL
-             + (1.0 / (2.0 * r*r * f)) * dr * dr
-             + r * (dtheta*dtheta + st*st*dphi*dphi);
-        d2.y = -2.0*dr*dtheta/r + st*ct*dphi*dphi;
-        d2.z = -2.0*dr*dphi/r - 2.0*ct/max(st, 0.02) * dtheta * dphi;
-    }
-}
-
 void rk4Step(inout Ray ray, float dL) {
     if (useKerr()) {
-        // Kerr: spherical RK4 over (r, θ, φ, dr, dθ, dφ). d2.z=0 → dφ from kerrDphi.
-        vec3 k1a, k1b, k2a, k2b, k3a, k3b, k4a, k4b;
-        Ray tmp;
-        geodesicRHS(ray, k1a, k1b);
-        tmp = ray;
-        tmp.r += 0.5*dL*k1a.x; tmp.theta += 0.5*dL*k1a.y; tmp.phi += 0.5*dL*k1a.z;
-        tmp.dr += 0.5*dL*k1b.x; tmp.dtheta += 0.5*dL*k1b.y; tmp.dphi += 0.5*dL*k1b.z;
-        geodesicRHS(tmp, k2a, k2b);
-        tmp = ray;
-        tmp.r += 0.5*dL*k2a.x; tmp.theta += 0.5*dL*k2a.y; tmp.phi += 0.5*dL*k2a.z;
-        tmp.dr += 0.5*dL*k2b.x; tmp.dtheta += 0.5*dL*k2b.y; tmp.dphi += 0.5*dL*k2b.z;
-        geodesicRHS(tmp, k3a, k3b);
-        tmp = ray;
-        tmp.r += dL*k3a.x; tmp.theta += dL*k3a.y; tmp.phi += dL*k3a.z;
-        tmp.dr += dL*k3b.x; tmp.dtheta += dL*k3b.y; tmp.dphi += dL*k3b.z;
-        geodesicRHS(tmp, k4a, k4b);
-        ray.r      += dL/6.0 * (k1a.x + 2.0*k2a.x + 2.0*k3a.x + k4a.x);
-        ray.theta  += dL/6.0 * (k1a.y + 2.0*k2a.y + 2.0*k3a.y + k4a.y);
-        ray.phi    += dL/6.0 * (k1a.z + 2.0*k2a.z + 2.0*k3a.z + k4a.z);
-        ray.dr     += dL/6.0 * (k1b.x + 2.0*k2b.x + 2.0*k3b.x + k4b.x);
-        ray.dtheta += dL/6.0 * (k1b.y + 2.0*k2b.y + 2.0*k3b.y + k4b.y);
-        ray.dphi   += dL/6.0 * (k1b.z + 2.0*k2b.z + 2.0*k3b.z + k4b.z);
-        float rs_si = ray.r * U;
-        float st = sin(ray.theta), ct = cos(ray.theta);
-        float cp = cos(ray.phi),   sp = sin(ray.phi);
-        ray.x = rs_si*st*cp; ray.y = rs_si*ct; ray.z = rs_si*st*sp;   // Y-polar
+        // Kerr-Schild Cartesian RK4 over (position x, covariant momentum p).
+        float a = kerrA(); float E = ray.E;
+        vec3 x = ray.cpos, p = ray.cvel;
+        vec3 dx1,dp1, dx2,dp2, dx3,dp3, dx4,dp4;
+        ksRHS(x,              p,              E, a, dx1, dp1);
+        ksRHS(x+0.5*dL*dx1,   p+0.5*dL*dp1,   E, a, dx2, dp2);
+        ksRHS(x+0.5*dL*dx2,   p+0.5*dL*dp2,   E, a, dx3, dp3);
+        ksRHS(x+dL*dx3,       p+dL*dp3,       E, a, dx4, dp4);
+        vec3 dxavg = (dx1 + 2.0*dx2 + 2.0*dx3 + dx4) / 6.0;
+        ray.cpos = x + dL*dxavg;
+        ray.cvel = p + dL/6.0*(dp1 + 2.0*dp2 + 2.0*dp3 + dp4);
+        ray.r  = ksRadius(ray.cpos, a);
+        ray.dr = dot(ray.cpos, dxavg);             // radial-velocity sign
+        vec3 si = ray.cpos * U;
+        ray.x = si.x; ray.y = si.y; ray.z = si.z;  // SI world (KS Cartesian = world)
     } else {
         // Legacy Schwarzschild: Cartesian RK4 over (cpos, cvel). No spherical
         // coords → no axis singularity → no seam.
@@ -343,16 +303,6 @@ vec3 deepSky(vec3 d) {
     stars *= (1.0 - 0.55 * dust);
 
     return min(stars + nebCol + glow + spiralGalaxy(d), vec3(1.6));
-}
-vec3 rayCartesianDir(Ray ray) {
-    float st = sin(ray.theta), ct = cos(ray.theta);
-    float sp = sin(ray.phi),   cp = cos(ray.phi);
-    float dphi = useKerr() ? kerrDphi(ray.r, ray.theta, ray.E, ray.L, ray.Q) : ray.dphi;
-    return normalize(vec3(
-        ray.dr * st*cp + ray.r * ray.dtheta * ct*cp - ray.r * st * dphi * sp,
-        ray.dr * ct    - ray.r * ray.dtheta * st,
-        ray.dr * st*sp + ray.r * ray.dtheta * ct*sp + ray.r * st * dphi * cp
-    ));
 }
 
 // Emissive colour of the accretion disk at an equatorial hit point (cylindrical
