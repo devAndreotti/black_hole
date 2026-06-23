@@ -151,3 +151,14 @@ vcpkg_installed
 
 # Editor/tool backup files
 *.bak
+
+# ── Fork-local (não versionar) ───────────────────────────────────────────────
+# Estado de runtime salvo pelo saveSessionState()
+session_state.txt
+# Render headless e screenshots
+render.bmp
+bh_*.bmp
+# Ferramentas e notas locais
+.antigravitycli/
+backup_original/
+README.local.md
