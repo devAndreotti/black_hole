@@ -411,6 +411,7 @@ void Engine::uploadCameraUBO(const Camera& cam, int rw, int rh, int steps, float
         int sampleIndex, showBeam;
         float time;
         int diskAnim;
+        float bhTilt;
     } data;
     vec3 fwd = normalize(cam.target - cam.position());
     vec3 up  = vec3(0,1,0);
@@ -425,8 +426,9 @@ void Engine::uploadCameraUBO(const Camera& cam, int rw, int rh, int steps, float
     data.kerrSpin  = kerrSpin;
     data.jitter = jitter; data.sampleIndex = sampleIndex;
     data.showBeam = showBeam ? 1 : 0;
-    data.time = (float)glfwGetTime();
+    data.time = (g_renderTime >= 0.0f) ? g_renderTime : (float)glfwGetTime();
     data.diskAnim = diskAnimEnabled ? 1 : 0;
+    data.bhTilt = bhTilt;
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UBOData), &data);
 }
@@ -460,7 +462,7 @@ void Engine::uploadDiskUBO() {
     double rplus = 0.5 * (1.0 + std::sqrt(std::max(0.0, 1.0 - a*a)));
     inner = std::max(inner, rplus * 1.1);                     // stay outside the horizon
     float r1 = showDisk ? float(SagA.r_s * inner) : 0.0f;
-    float r2 = showDisk ? float(SagA.r_s * 6.8)   : 0.0f;
+    float r2 = showDisk ? float(SagA.r_s * 9.0)   : 0.0f;
     struct DiskData { float r1, r2, num, thickness; vec4 color_tint; }
     data = { r1, r2, 2.0f, 1e9f, diskColorTint };
     glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);

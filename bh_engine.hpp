@@ -25,6 +25,7 @@ struct Engine {
     size_t pboAllocSize = 0;
     // Kerr / animation
     float kerrSpin = 0.0f;
+    float bhTilt = 0.0f;          // BH symmetry-axis tilt (radians); spin axis follows
     bool diskAnimEnabled = false;
 
     int WIDTH = 800, HEIGHT = 600;

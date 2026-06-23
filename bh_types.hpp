@@ -39,6 +39,12 @@ using namespace std;
 namespace fs = std::filesystem;
 using Clock = std::chrono::high_resolution_clock;
 
+// Shared input tuning (window/terminal/wallpaper handlers used to each hardcode this,
+// the terminal/wallpaper as the rounded literal 0.0873f → drift from the window's exact value).
+static constexpr float kTiltStep    = float(M_PI) / 36.0f;  // BH tilt per T keypress (5°)
+static constexpr float kKerrSpinOn  = 0.9f;                 // K toggles spin between 0 and this
+static constexpr float kKerrSpinStep = 0.1f;                // '.'/',' fine spin nudge
+
 static std::string resourcePath(const char* name) {
 #ifdef _WIN32
     char path[MAX_PATH];
@@ -123,5 +129,10 @@ extern Camera camera;
 extern BlackHole SagA;
 extern std::vector<ObjectData> objects;
 extern std::string g_currentMode;
+extern float g_renderTime;   // >=0 overrides cam.time (for headless --time validation)
+extern bool  g_animate;      // when true, moons/binary orbit (set per-mode each frame)
+extern bool  g_cinematic;    // scripted fly-through camera path (--cinematic, key C)
+extern void  cinematicCamera(double t);
+extern int   cycleColorMode();  // advance disk/jet/meteor palette (F key); returns new mode
 extern bool updateGravityPhysics();
 extern void saveSessionState(const std::string& mode);

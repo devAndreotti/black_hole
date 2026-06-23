@@ -16,6 +16,21 @@ double G = 6.67430e-11;
 bool Gravity = false, showGrid = true, showDisk = true, showBeam = true;
 vec4 diskColorTint = vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
+// ── Scene colour palette ──────────────────────────────────────────────────────
+// The active palette (disk + jets + meteors all follow it) lives in diskColorTint.a
+// as an integer mode, read by geodesic.comp — the CMODE_* there MUST match these.
+// Set once by --red/--white/--blue/--green, or cycled live with F in every mode.
+enum ColorMode { CMODE_DEFAULT = 1, CMODE_RED, CMODE_WHITE, CMODE_BLUE, CMODE_GREEN };
+const char* const kColorModeNames[] = { "", "default", "red", "white", "blue", "green" };
+// Advance to the next palette (wraps GREEN→DEFAULT); returns the new mode so callers
+// can log it. Single source of truth for the F key across window/terminal/wallpaper.
+int cycleColorMode() {
+    int m = int(std::round(diskColorTint.a));
+    m = (m >= CMODE_GREEN) ? CMODE_DEFAULT : m + 1;
+    diskColorTint.a = float(m);
+    return m;
+}
+
 static std::vector<std::string> initNumStrs() {
     std::vector<std::string> v(256);
     for (int i=0;i<256;++i) v[i]=std::to_string(i);
@@ -26,17 +41,72 @@ const std::vector<std::string> numStrs = initNumStrs();
 Camera camera;
 BlackHole SagA(vec3(0.0f), 8.54e36);
 std::vector<ObjectData> objects = {
-    { vec4(4e11f,0,0,4e10f),  vec4(0,0,1,1), 1.98892e30f },
-    { vec4(0,0,4e11f,4e10f),  vec4(1,0,0,1), 1.98892e30f },
-    { vec4(-4e11f,0,0,7e10f), vec4(0,1,0,1), 1.98892e30f },
+    { vec4( 3.6e11f, 1.8e11f,  0.8e11f, 4e10f), vec4(0,0,1,1), 1.98892e30f },  // blue (raised)
+    { vec4( 0.6e11f,-2.2e11f,  3.6e11f, 4e10f), vec4(1,0,0,1), 1.98892e30f },  // red (low, +Z)
+    { vec4(-3.8e11f, 1.0e11f, -1.6e11f, 7e10f), vec4(0,1,0,1), 1.98892e30f },  // green (raised, -Z)
     { vec4(0,0,0,(float)SagA.r_s), vec4(0,0,0,1), (float)SagA.mass },
+    // Moons (Etapa E): small, dim bodies orbiting the suns. Dim colour (max<0.7)
+    // → no corona/flare; they lens and vanish behind the BH via the existing object
+    // logic. Positions are driven kinematically by updateMoons() (animated with A).
+    { vec4(5.1e11f,0,0,9e9f),    vec4(0.45f,0.50f,0.60f,1), 1e22f },  // orbits blue (0)
+    { vec4(0,0,5.4e11f,8e9f),    vec4(0.58f,0.46f,0.40f,1), 1e22f },  // orbits red  (1)
+    { vec4(-6.1e11f,0,0,1.1e10f),vec4(0.48f,0.52f,0.55f,1), 1e22f },  // orbits green (2)
+    // Binary companion: a bright orange star in a tight orbit around the blue sun
+    // (idx 0) — gets a corona; no flare; orbits with A like the moons.
+    { vec4(4.7e11f,0,0,2.2e10f), vec4(1.0f,0.62f,0.25f,1), 8e29f },   // companion of blue (0)
 };
 std::string g_currentMode = "window";
+float g_renderTime = -1.0f;        // --time override for headless temporal validation
+bool  g_animate = true;            // moons/binary orbit (terminal/wallpaper always; window per autoRotate/A)
+bool  g_cinematic = false;         // scripted fly-through camera (--cinematic / key C)
+static bool g_autoRotate = true;   // window mode: idle auto-orbit (toggle with R)
+
+// Cinematic fly-through: a looping path that drifts face-on, dives toward the
+// photon ring (whipping around, edge-on), then pulls back out. Great for
+// screenshots / a "living" wallpaper. Driven purely by time t (seconds).
+void cinematicCamera(double t) {
+    float ph   = float(fmod(t, 50.0)) / 50.0f;                 // 50s loop
+    float dive = 0.5f - 0.5f * cosf(ph * 2.0f * float(M_PI));  // smooth 0→1→0 (one dive/loop)
+    float ease = dive * dive * (3.0f - 2.0f * dive);           // smootherstep
+    camera.radius    = glm::mix(5.5e11f, 1.3e11f, ease);                 // far → close → far
+    camera.azimuth   = float(t) * 0.06f + ease * 2.2f;                   // drift + whip on approach
+    camera.elevation = glm::clamp(glm::mix(0.95f, 1.42f, ease),
+                                  0.05f, float(M_PI) - 0.05f);           // face-on → near edge-on
+    camera.target = vec3(0.0f); camera.moving = false; camera.dirty = true;
+}
 Engine engine;
 
 // ── Physics ─────────────────────────────────────────────────────────────────
+// Kinematic moon orbits (Etapa E): each moon circles its parent sun's current
+// position in a tilted plane. Driven by time (g_renderTime override for headless
+// --time validation). Cheap; no integration, so they never decay into the sun.
+static void updateMoons() {
+    float t = (g_renderTime >= 0.0f) ? g_renderTime : (float)glfwGetTime();
+    struct M { int mi, pi; float R, w, ph; vec3 axis; };
+    static const M m[] = {
+        { 4, 0, 1.1e11f, 0.55f, 0.0f, vec3(0,1,0) },
+        { 5, 1, 1.4e11f, 0.42f, 2.1f, vec3(0.35f,1,0.2f) },
+        { 6, 2, 2.1e11f, 0.32f, 4.0f, vec3(0,1,0.4f) },
+        { 7, 0, 7.0e10f, 0.90f, 1.0f, vec3(0.2f,1,0.3f) },   // tight binary companion
+    };
+    for (const auto& o : m) {
+        if (o.mi >= (int)objects.size()) continue;
+        vec3 c  = vec3(objects[o.pi].posRadius);
+        vec3 ax = normalize(o.axis);
+        vec3 u  = normalize(cross(ax, vec3(1,0,0)));
+        vec3 v  = cross(ax, u);
+        float a = o.w * t + o.ph;
+        vec3 p  = c + o.R * (cosf(a)*u + sinf(a)*v);
+        objects[o.mi].posRadius.x = p.x;
+        objects[o.mi].posRadius.y = p.y;
+        objects[o.mi].posRadius.z = p.z;
+    }
+}
+
 bool updateGravityPhysics() {
-    if (!Gravity) return false;
+    bool moved = false;
+    if (g_animate) { updateMoons(); moved = true; }                // moons/binary orbit
+    if (!Gravity) return moved;
     for (auto& obj : objects) {
         vec3 acc(0.0f);
         for (auto& obj2 : objects) {
@@ -117,6 +187,8 @@ static void renderToFile(int w, int h, float elev, float azim, double zoom, cons
     camera.azimuth = azim;
     camera.radius = glm::clamp((float)zoom, camera.minRadius, camera.maxRadius);
     camera.moving = false; camera.dirty = true; camera.target = vec3(0.0f);
+    if (g_cinematic) cinematicCamera(g_renderTime >= 0.0f ? double(g_renderTime) : 0.0);  // fly-through snapshot
+    updateMoons();   // position moons for this (deterministic) snapshot / --time
     for (int s = 0; s < 24; ++s) engine.dispatchCompute(camera, s);  // TAA accumulate
     std::vector<unsigned char> px((size_t)w*h*4);
     glBindTexture(GL_TEXTURE_2D, engine.texture);
@@ -169,22 +241,38 @@ void setupCameraCallbacks(GLFWwindow* win) {
             if (key==GLFW_KEY_RIGHT_BRACKET) { engine.COMPUTE_STEPS=std::min(2000,engine.COMPUTE_STEPS+100); engine.COMPUTE_MOVING_STEPS=engine.COMPUTE_STEPS; cam->update(); saveSessionState(g_currentMode); }
             if (key==GLFW_KEY_LEFT_BRACKET)  { engine.COMPUTE_STEPS=std::max(100, engine.COMPUTE_STEPS-100); engine.COMPUTE_MOVING_STEPS=engine.COMPUTE_STEPS; cam->update(); saveSessionState(g_currentMode); }
             if (key==GLFW_KEY_M) { showGrid=!showGrid; cam->update(); }
+            if (key==GLFW_KEY_R) { g_autoRotate=!g_autoRotate; cam->update();
+                                   std::cout<<"[INFO] Auto-rotate: "<<(g_autoRotate?"ON":"OFF")<<"\n"; }
+            if (key==GLFW_KEY_C) { g_cinematic=!g_cinematic; cam->update();
+                                   std::cout<<"[INFO] Cinematic: "<<(g_cinematic?"ON":"OFF")<<"\n"; }
             if (key==GLFW_KEY_Q||key==GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w,GLFW_TRUE);
             if (key==GLFW_KEY_S) saveScreenshot(engine.WIDTH, engine.HEIGHT);
             if (key==GLFW_KEY_B) { engine.bloomEnabled=!engine.bloomEnabled; cam->dirty=true; }
             if (key==GLFW_KEY_A) { engine.diskAnimEnabled=!engine.diskAnimEnabled; cam->dirty=true;
                                    std::cout<<"[INFO] Disk animation: "<<(engine.diskAnimEnabled?"ON":"OFF")<<"\n"; }
             if (key==GLFW_KEY_K) {
-                engine.kerrSpin = (engine.kerrSpin < 0.01f) ? 0.9f : 0.0f;
+                engine.kerrSpin = (engine.kerrSpin < 0.01f) ? kKerrSpinOn : 0.0f;
                 cam->dirty=true;
                 std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
             }
             // Fine Kerr-spin control: '.' raises, ',' lowers (clamped to [0,1]).
             if (key==GLFW_KEY_PERIOD || key==GLFW_KEY_COMMA) {
-                float d = (key==GLFW_KEY_PERIOD) ? 0.1f : -0.1f;
+                float d = (key==GLFW_KEY_PERIOD) ? kKerrSpinStep : -kKerrSpinStep;
                 engine.kerrSpin = glm::clamp(engine.kerrSpin + d, 0.0f, 1.0f);
                 cam->dirty=true;
                 std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
+            }
+            // BH tilt: T tips the disk/spin/jets +5°, Shift+T −5° (live).
+            if (key==GLFW_KEY_T) {
+                engine.bhTilt += (mods & GLFW_MOD_SHIFT) ? -kTiltStep : kTiltStep;
+                cam->dirty=true;
+                std::cout<<"[INFO] BH tilt: "<<engine.bhTilt*180.0f/float(M_PI)<<" deg\n";
+            }
+            // F: cycle the scene palette (disk + jets + meteors all follow it).
+            if (key==GLFW_KEY_F) {
+                int m = cycleColorMode();
+                cam->dirty=true;
+                std::cout<<"[INFO] Color mode: "<<kColorModeNames[m]<<" ("<<m<<")\n";
             }
         }
     });
@@ -225,7 +313,11 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i],"--test"))     runTests=true;
         else if (!strcmp(argv[i],"--red"))   diskColorTint=vec4(0,0,0,2);
         else if (!strcmp(argv[i],"--white")) diskColorTint=vec4(0,0,0,3);
+        else if (!strcmp(argv[i],"--blue"))  diskColorTint=vec4(0,0,0,4);
+        else if (!strcmp(argv[i],"--green")) diskColorTint=vec4(0,0,0,5);
         else if (!strcmp(argv[i],"--spin") && i+1<argc) { engine.kerrSpin=atof(argv[++i]); }
+        else if (!strcmp(argv[i],"--tilt") && i+1<argc) { engine.bhTilt=atof(argv[++i])*float(M_PI)/180.0f; }
+        else if (!strcmp(argv[i],"--cinematic")) g_cinematic=true;
         else if (!strcmp(argv[i],"--anim"))  engine.diskAnimEnabled=true;
         else if (!strcmp(argv[i],"--legacy")||!strcmp(argv[i],"-l")||!strcmp(argv[i],"legacy")) legacyMode=true;
         else if (!strcmp(argv[i],"--render")) renderMode=true;
@@ -233,6 +325,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i],"--elev") && i+1<argc) rElev=atof(argv[++i]);
         else if (!strcmp(argv[i],"--azim") && i+1<argc) rAzim=atof(argv[++i]);
         else if (!strcmp(argv[i],"--zoom") && i+1<argc) rZoom=atof(argv[++i]);
+        else if (!strcmp(argv[i],"--time") && i+1<argc) g_renderTime=atof(argv[++i]);
         else if (!strcmp(argv[i],"--out")  && i+1<argc) rOut=argv[++i];
     }
     if (runTests) { runUnitTests(); return 0; }
@@ -308,6 +401,14 @@ int main(int argc, char** argv) {
         // Disk animation always re-renders (no accumulation)
         if (engine.diskAnimEnabled) { camera.dirty=true; accumSample=0; }
 
+        // Window mode: idle auto-orbit (R toggles). Paused while dragging; skipped
+        // in wallpaper mode, which drives its own rotation in wallpaperUpdate.
+        if (!wallpaperMode && g_cinematic) {
+            cinematicCamera(glfwGetTime());
+        } else if (!wallpaperMode && g_autoRotate && !camera.dragging && !camera.panning) {
+            camera.azimuth += 0.0035f; camera.dirty = true;
+        }
+
         bool wantAccum = !camera.dirty&&!Gravity&&!camera.moving&&accumSample>0&&accumSample<ACCUM_SAMPLES;
         if (!camera.dirty&&!Gravity&&!wantAccum) {
             glfwWaitEventsTimeout(1.0/30.0); continue;
@@ -318,6 +419,9 @@ int main(int argc, char** argv) {
             lastFrameStart=glfwGetTime();
         }
         glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        // orbit bodies while the view is animating (auto-rotate / A / wallpaper); when
+        // both are off the window goes static so the TAA can accumulate a crisp frame.
+        g_animate = wallpaperMode || g_autoRotate || engine.diskAnimEnabled;
         bool sceneDirty=updateGravityPhysics();
         glViewport(0,0,engine.WIDTH,engine.HEIGHT);
         if (camera.dirty||sceneDirty) {

@@ -90,7 +90,24 @@ void wallpaperUpdate(GLFWwindow* win) {
         if (gIs&&!gWas){ Gravity=!Gravity; keyInteract=true; } gWas=gIs;
         static bool mWas=false; bool mIs=(GetAsyncKeyState('M')&0x8000)!=0;
         if (mIs&&!mWas){ showGrid=!showGrid; keyInteract=true; } mWas=mIs;
+        // Kerr spin (K toggle, .,/ fine) and disk animation (A) — compute uniforms,
+        // so they take effect in the wallpaper immediately.
+        static bool kWas=false; bool kIs=(GetAsyncKeyState('K')&0x8000)!=0;
+        if (kIs&&!kWas){ engine.kerrSpin=(engine.kerrSpin<0.01f)?kKerrSpinOn:0.0f; keyInteract=true; saveSessionState("wallpaper"); } kWas=kIs;
+        static bool aWas=false; bool aIs=(GetAsyncKeyState('A')&0x8000)!=0;
+        if (aIs&&!aWas){ engine.diskAnimEnabled=!engine.diskAnimEnabled; keyInteract=true; } aWas=aIs;
+        static bool pdWas=false; bool pdIs=(GetAsyncKeyState(VK_OEM_PERIOD)&0x8000)!=0;
+        if (pdIs&&!pdWas){ engine.kerrSpin=glm::clamp(engine.kerrSpin+kKerrSpinStep,0.0f,1.0f); keyInteract=true; saveSessionState("wallpaper"); } pdWas=pdIs;
+        static bool cmWas=false; bool cmIs=(GetAsyncKeyState(VK_OEM_COMMA)&0x8000)!=0;
+        if (cmIs&&!cmWas){ engine.kerrSpin=glm::clamp(engine.kerrSpin-kKerrSpinStep,0.0f,1.0f); keyInteract=true; saveSessionState("wallpaper"); } cmWas=cmIs;
+        static bool tWas=false; bool tIs=(GetAsyncKeyState('T')&0x8000)!=0;
+        if (tIs&&!tWas){ bool sh=(GetAsyncKeyState(VK_SHIFT)&0x8000)!=0; engine.bhTilt += sh?-kTiltStep:kTiltStep; keyInteract=true; } tWas=tIs;
+        // F: cycle the scene palette (disk + jets + meteors all follow it)
+        static bool fWas=false; bool fIs=(GetAsyncKeyState('F')&0x8000)!=0;
+        if (fIs&&!fWas){ cycleColorMode(); keyInteract=true; } fWas=fIs;
     }
+
+    if (g_cinematic) { cinematicCamera(glfwGetTime()); return; }   // scripted fly-through
 
     if (mouseMoving||keyInteract) {
         camera.azimuth = wallpaper.baseAzimuth+wallpaper.offAz;
@@ -108,7 +125,14 @@ void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
     glfwHideWindow(win);
     int W = GetSystemMetrics(SM_CXSCREEN), H = GetSystemMetrics(SM_CYSCREEN);
     wallpaper.monW = W; wallpaper.monH = H;
-    int rw = std::max(384,W/5), rh = std::max(216,H/5);
+    // Render resolution = screen / wpDiv (DComp bilinear-upscales to full screen).
+    // Was W/5 (very soft, 5x upscale); default now W/2 for a sharper wallpaper.
+    // The wallpaper auto-rotates every frame so TAA never accumulates — base
+    // resolution drives sharpness. Lower wpDiv = sharper but heavier (rotation can
+    // get choppy on a modest GPU); raise BH_WP_DIV to smooth it back.
+    int wpDiv = 2;
+    if (const char* d = std::getenv("BH_WP_DIV")) { int v = std::atoi(d); if (v>=1 && v<=8) wpDiv = v; }
+    int rw = std::max(480, W/wpDiv), rh = std::max(270, H/wpDiv);
     eng.COMPUTE_WIDTH = eng.COMPUTE_MOVING_WIDTH = rw;
     eng.COMPUTE_HEIGHT = eng.COMPUTE_MOVING_HEIGHT = rh;
     eng.COMPUTE_MOVING_STEPS = eng.COMPUTE_STEPS;
@@ -165,6 +189,18 @@ void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
     g_wpMode=3; wallpaper.baseAzimuth=camera.azimuth; wallpaper.baseElevation=camera.elevation;
     wlog("DComp wallpaper behind icons " + std::to_string(rw) + "x" + std::to_string(rh));
 
+    // Offscreen target to composite compute + bloom (toggle B) before the readback.
+    // The DComp path reads a texture rather than the window, so it otherwise skips
+    // the bloom pass that drawFullScreenQuad does in the windowed path.
+    GLuint wpFbo=0, wpTex=0;
+    glGenTextures(1,&wpTex); glBindTexture(GL_TEXTURE_2D,wpTex);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,rw,rh,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+    glGenFramebuffers(1,&wpFbo); glBindFramebuffer(GL_FRAMEBUFFER,wpFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,wpTex,0);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+
     int accumSample=0; const int ACCUM=16;
     const double minFrame=1.0/30.0; double last=glfwGetTime();
     while (!glfwWindowShouldClose(win)) {
@@ -181,6 +217,12 @@ void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
         if (camera.dirty||sceneDirty) { accumSample=0; eng.dispatchCompute(camera,0); accumSample=1; camera.dirty=false; }
         else if (wantAccum) { eng.dispatchCompute(camera,accumSample); ++accumSample; }
 
+        // composite compute + bloom into wpTex, then read that (bloomed) texture
+        glBindFramebuffer(GL_FRAMEBUFFER, wpFbo);
+        glViewport(0,0,rw,rh);
+        eng.drawFullScreenQuad();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, wpTex);
         glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
         eng.initPBO(size_t(rw)*rh*4);
         const unsigned char* pboPtr = eng.pboBeginRead(GL_BGRA);
