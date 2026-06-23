@@ -1,52 +1,52 @@
-# black_hole — fork GPU (Kerr · wallpaper · terminal)
+# black_hole — GPU fork (Kerr · wallpaper · terminal)
 
-Simulação de buraco negro em tempo real por **ray-march de geodésicas** num **compute
-shader** (OpenGL 4.3). Fork de [`kavan010/black_hole`](https://github.com/kavan010/black_hole)
-com física estendida (Kerr), pós-processamento cinematográfico e três formas novas de
-rodar — inclusive como **papel de parede vivo** do Windows e **dentro do terminal**.
+Real-time black hole simulation via **geodesic ray-marching** in a **compute shader**
+(OpenGL 4.3). A fork of [`kavan010/black_hole`](https://github.com/kavan010/black_hole)
+with extended physics (Kerr), cinematic post-processing, and three new ways to run it —
+including as a **live Windows wallpaper** and **inside the terminal**.
 
-> **Este é um fork.**
-> Upstream original: **[kavan010/black_hole](https://github.com/kavan010/black_hole)** —
-> crédito ao autor pela base (ray-tracing, disco de acreção, grade de curvatura).
+> **This is a fork.**
+> Original upstream: **[kavan010/black_hole](https://github.com/kavan010/black_hole)** —
+> credit to the author for the base (ray-tracing, accretion disk, spacetime grid).
 > Fork: **[devAndreotti/black_hole](https://github.com/devAndreotti/black_hole)**.
 
 ---
 
-## O que este fork adiciona (diferenças vs. upstream)
+## What this fork adds (differences vs. upstream)
 
-### Física
-- **Buraco negro de Kerr (rotação)** — integrador Kerr-Schild Cartesiano *sem costura no
-  eixo*, com frame-dragging (sombra em "D", anel de fótons deslocado). Liga com `K` ou
-  `--spin a*`. Sem spin, recai no integrador Schwarzschild idêntico ao do upstream.
-- **Inclinação do eixo** (`--tilt G°` / tecla `T`) — disco + eixo de spin + jatos giram
-  juntos para qualquer ângulo; o efeito Kerr acompanha.
-- **ISCO variável** — a borda interna do disco recua conforme o spin sobe.
-- **Doppler beaming relativístico + redshift gravitacional** no disco.
+### Physics
+- **Kerr (rotating) black hole** — Cartesian Kerr-Schild integrator with *no axis seam*,
+  showing frame-dragging (a "D"-shaped shadow, an offset photon ring). Toggle with `K` or
+  `--spin a*`. With no spin it falls back to the Schwarzschild integrator, identical to
+  upstream.
+- **Axis tilt** (`--tilt G°` / key `T`) — disk + spin axis + jets all tip together to any
+  angle; the Kerr effect follows.
+- **Variable ISCO** — the disk's inner edge recedes as the spin rises.
+- **Relativistic Doppler beaming + gravitational redshift** on the disk.
 
-### Aparência / cena viva
-- **Jatos polares relativísticos** (Blandford-Znajek) — surgem com o spin; cor segue a paleta.
-- **Paleta de cores** ciclável (`F`) ou por flag: `--red` / `--white` / `--blue` /
-  `--green` — disco, jatos e meteoros seguem a mesma paleta.
-- **Sóis 3D com vida**: coronas, limb-darkening, granulação e manchas; um sol variável com
-  flares; **luas orbitando** e um **companheiro binário** (animam com `A`).
-- **Meteoros**: trânsito (flyby que cresce vindo de longe) ou **captura com
-  espaguetificação** + redshift, afinando até sumir no horizonte.
-- **Céu profundo**: campo de estrelas, poeira, galáxia espiral lenteada (anel de Einstein)
-  e sóis distantes.
+### Appearance / living scene
+- **Relativistic polar jets** (Blandford-Znajek) — appear with spin; color follows the palette.
+- **Color palette** cyclable with `F` or via flag: `--red` / `--white` / `--blue` /
+  `--green` — disk, jets, and meteors all follow the same palette.
+- **3D suns with life**: coronae, limb-darkening, granulation and starspots; a variable sun
+  that flares; **orbiting moons** and a **binary companion** (animate with `A`).
+- **Meteors**: transit (a flyby that grows in from afar) or **capture with
+  spaghettification** + redshift, tapering until it vanishes at the horizon.
+- **Deep sky**: starfield, dust, a lensed spiral galaxy (Einstein ring) and distant suns.
 
-### Pós-processamento / câmera
-- **Tone mapping ACES** (filmic) no frame final + **TAA** (anti-aliasing temporal) + **bloom**.
-- **Modo cinemático** (`--cinematic` / tecla `C`) — câmera voa num caminho em loop
-  (longe/face-on → mergulho edge-on no anel de fótons → recua).
+### Post-processing / camera
+- **ACES tone mapping** (filmic) on the final frame + **TAA** (temporal anti-aliasing) + **bloom**.
+- **Cinematic mode** (`--cinematic` / key `C`) — the camera flies a looping path
+  (far/face-on → an edge-on dive into the photon ring → recede).
 
-### Plataforma / formas de rodar (Windows)
-- **Modo wallpaper** — renderiza *atrás dos ícones* do desktop via DirectComposition
-  (Win11 24H2). Roda em segundo plano com parallax pelo mouse.
-- **Modo terminal** — renderiza *dentro do terminal* com meios-blocos ANSI truecolor
-  (mesma pipeline GPU), com frame-diff e teto de resolução para não travar.
-- **Toolchain portátil** — build via `.deps` (mingw + cmake + ninja); **não precisa de
-  vcpkg** nem de instalar nada (o upstream exigia vcpkg).
-- **Render headless** (`--render`) — salva BMP em alta resolução para validação visual.
+### Platform / ways to run (Windows)
+- **Wallpaper mode** — renders *behind the desktop icons* via DirectComposition
+  (Win11 24H2). Runs in the background with mouse parallax.
+- **Terminal mode** — renders *inside the terminal* using truecolor ANSI half-blocks
+  (the same GPU pipeline), with frame-diffing and a resolution cap so it never stalls.
+- **Portable toolchain** — builds via `.deps` (mingw + cmake + ninja); **no vcpkg** and
+  nothing to install (upstream required vcpkg).
+- **Headless render** (`--render`) — saves a high-res BMP for visual validation.
 
 ---
 
@@ -56,64 +56,64 @@ rodar — inclusive como **papel de parede vivo** do Windows e **dentro do termi
 .\build.ps1
 ```
 
-Gera `build\winlibs\BlackHole3D.exe` (GPU) e `BlackHole2D.exe` (lente 2D). A toolchain
-portátil fica em `.deps` — nada a instalar. (Para o caminho clássico com vcpkg/apt, veja o
-[README do upstream](https://github.com/kavan010/black_hole).)
+Produces `build\winlibs\BlackHole3D.exe` (GPU) and `BlackHole2D.exe` (2D lens). The
+portable toolchain lives in `.deps` — nothing to install. (For the classic vcpkg/apt path,
+see the [upstream README](https://github.com/kavan010/black_hole).)
 
-## Rodar
+## Run
 
 ```powershell
-.\run.ps1                 # janela interativa (padrão)
-.\run.ps1 --terminal      # dentro do terminal (ANSI truecolor)
-.\run.ps1 --wallpaper     # papel de parede vivo (sair: Ctrl+Alt+Q)
-.\run.ps1 --2d            # lente gravitacional 2D
-.\run.ps1 stop            # mata os processos
+.\run.ps1                 # interactive window (default)
+.\run.ps1 --terminal      # inside the terminal (truecolor ANSI)
+.\run.ps1 --wallpaper     # live wallpaper (quit: Ctrl+Alt+Q)
+.\run.ps1 --2d            # 2D gravitational lens
+.\run.ps1 stop            # kill the processes
 ```
 
-### Modo wallpaper
-Renderiza atrás dos ícones (DirectComposition). Mouse = parallax; **Ctrl+Alt+Q** sai de
-qualquer lugar. Ajuste a qualidade com `BH_WP_DIV` (`1` = nativo, `2` = padrão, `3`–`4` =
-mais leve).
+### Wallpaper mode
+Renders behind the icons (DirectComposition). Mouse = parallax; **Ctrl+Alt+Q** quits from
+anywhere. Tune quality with `BH_WP_DIV` (`1` = native, `2` = default, `3`–`4` = lighter).
 
-### Modo terminal
-A mesma pipeline GPU desenhada em células de texto (`▀`, truecolor): ocupa a tela inteira,
-opaco. Reescreve só as células que mudam (frame-diff) e limita a resolução do ray-march
-(`BH_TERM_MAXRES`, padrão `220x160`) para não travar quando a fonte é pequena.
+### Terminal mode
+The same GPU pipeline drawn into text cells (`▀`, truecolor): full-screen, opaque. It
+rewrites only the cells that changed (frame-diff) and caps the ray-march resolution
+(`BH_TERM_MAXRES`, default `220x160`) so it won't stall when the font is small.
 
-## Flags e controles
+## Flags and controls
 
-Referência completa (todas as flags, teclas por modo e variáveis de ambiente) em
-**[RUNNING.md](RUNNING.md)**. Resumo:
+Full reference (every flag, keys per mode, environment variables) in **[RUNNING.md](RUNNING.md)**.
+Summary:
 
-| Flag | Efeito |
+| Flag | Effect |
 |---|---|
-| `--spin a*` | Spin de Kerr 0–1 (1 = extremo) |
-| `--tilt G` | Inclina o eixo do BH em G graus |
-| `--anim` | Disco Kepleriano girando + luas orbitando |
-| `--cinematic` | Câmera voa num caminho em loop |
-| `--red` / `--white` / `--blue` / `--green` | Paleta do disco/jatos/meteoros |
-| `--render` | 1 frame headless → BMP (`--size`, `--time`, `--out`, …) |
-| `--legacy` | Shader Schwarzschild original (para comparar) |
+| `--spin a*` | Kerr spin 0–1 (1 = extremal) |
+| `--tilt G` | Tilt the BH axis by G degrees |
+| `--anim` | Keplerian disk spinning + orbiting moons |
+| `--cinematic` | Camera flies a looping path |
+| `--red` / `--white` / `--blue` / `--green` | Disk/jet/meteor palette |
+| `--render` | One headless frame → BMP (`--size`, `--time`, `--out`, …) |
+| `--legacy` | Original Schwarzschild shader (for comparison) |
 
-Teclas principais (valem em janela/terminal/wallpaper): `K` spin · `.`/`,` spin fino ·
-`T`/Shift+`T` inclinar · `A` animação · `F` paleta · `C` cinemático · `B` bloom · `M`
-grade · `+`/`-` zoom · setas orbitam.
+Key controls (work in window/terminal/wallpaper): `K` spin · `.`/`,` fine spin ·
+`T`/Shift+`T` tilt · `A` animation · `F` palette · `C` cinematic · `B` bloom · `M` grid ·
+`+`/`-` zoom · arrows orbit.
 
 ---
 
-## Como o código funciona
+## How the code works
 
-- **2D** (`BlackHole2D`): lente gravitacional direta em `2D_lensing.cpp`.
-- **3D** (`BlackHole3D`): `black_hole.cpp` monta a cena e os UBOs (câmera, disco, objetos)
-  e despacha o compute shader `geodesic.comp`, que integra as geodésicas na GPU. Os módulos
-  `bh_engine` (pipeline GL/bloom/TAA), `bh_terminal` e `bh_wallpaper` cuidam de cada modo de
-  saída. Veja [RUNNING.md](RUNNING.md) para o detalhe de Kerr × legacy e da arquitetura.
+- **2D** (`BlackHole2D`): direct gravitational lensing in `2D_lensing.cpp`.
+- **3D** (`BlackHole3D`): `black_hole.cpp` builds the scene and UBOs (camera, disk,
+  objects) and dispatches the `geodesic.comp` compute shader, which integrates the
+  geodesics on the GPU. The `bh_engine` (GL pipeline / bloom / TAA), `bh_terminal` and
+  `bh_wallpaper` modules handle each output mode. See [RUNNING.md](RUNNING.md) for the
+  Kerr × legacy detail and the architecture.
 
-## Créditos
+## Credits
 
-- **Base original:** [kavan010/black_hole](https://github.com/kavan010/black_hole) —
-  ray-tracing, disco de acreção e grade de espaço-tempo.
-- **Fork e extensões** (Kerr inclinável, jatos, wallpaper, terminal, cinemático, ACES,
-  vida na cena): este repositório.
+- **Original base:** [kavan010/black_hole](https://github.com/kavan010/black_hole) —
+  ray-tracing, accretion disk, and spacetime grid.
+- **Fork and extensions** (tiltable Kerr, jets, wallpaper, terminal, cinematic, ACES,
+  living scene): this repository.
 
-A licença segue a do projeto upstream.
+License follows the upstream project.
