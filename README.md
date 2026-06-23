@@ -12,17 +12,32 @@ including as a **live Windows wallpaper** and **inside the terminal**.
 
 ---
 
+## Acknowledgement
+
+When I first saw the original video showcasing this project, it immediately stuck with me. I saved it and kept thinking about it for weeks — perhaps even a month or two after it was released. There was something fascinating about seeing a black hole simulated in real time, and I remember telling myself that one day I wanted to modify it and find a way to actually use it somewhere.
+
+This fork is the result of that idea.
+
+The original project was inspiring enough that I kept coming back to it long after I first discovered it. Eventually, curiosity turned into experimentation, and experimentation turned into new features: Kerr black holes, cinematic rendering, wallpaper integration, terminal rendering, and more.
+
+**All credit for the original project belongs to its creator.** The foundation, rendering techniques, and original vision came from the upstream repository. This fork is simply my attempt to build upon an already incredible piece of work and explore where those ideas could go next.
+
+Thank you for creating something inspiring enough to revisit months later.
+
+---
+
 ## What this fork adds (differences vs. upstream)
 
 ### Physics
-- **Kerr (rotating) black hole** — Cartesian Kerr-Schild integrator with *no axis seam*,
+
+* **Kerr (rotating) black hole** — Cartesian Kerr-Schild integrator with *no axis seam*,
   showing frame-dragging (a "D"-shaped shadow, an offset photon ring). Toggle with `K` or
   `--spin a*`. With no spin it falls back to the Schwarzschild integrator, identical to
   upstream.
-- **Axis tilt** (`--tilt G°` / key `T`) — disk + spin axis + jets all tip together to any
+* **Axis tilt** (`--tilt G°` / key `T`) — disk + spin axis + jets all tip together to any
   angle; the Kerr effect follows.
-- **Variable ISCO** — the disk's inner edge recedes as the spin rises.
-- **Relativistic Doppler beaming + gravitational redshift** on the disk.
+* **Variable ISCO** — the disk's inner edge recedes as the spin rises.
+* **Relativistic Doppler beaming + gravitational redshift** on the disk.
 
 ### Appearance / living scene
 - **Relativistic polar jets** (Blandford-Znajek) — appear with spin; color follows the palette.
