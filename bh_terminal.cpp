@@ -121,6 +121,7 @@ void runTerminal(Engine& eng) {
         g_animate = true; updateGravityPhysics();   // orbit moons/binary in the terminal too
 
         eng.dispatchCompute(camera, 0);
+        eng.drawGridToTexture(camera, true);
         glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
 
         size_t texBytes=size_t(cw)*chh*4;

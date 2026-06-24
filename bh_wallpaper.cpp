@@ -216,6 +216,7 @@ void runWallpaperDComp(GLFWwindow* win, Engine& eng) {
         }
         if (camera.dirty||sceneDirty) { accumSample=0; eng.dispatchCompute(camera,0); accumSample=1; camera.dirty=false; }
         else if (wantAccum) { eng.dispatchCompute(camera,accumSample); ++accumSample; }
+        eng.drawGridToTexture(camera, accumSample<=1);
 
         // composite compute + bloom into wpTex, then read that (bloomed) texture
         glBindFramebuffer(GL_FRAMEBUFFER, wpFbo);
