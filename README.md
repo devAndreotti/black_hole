@@ -65,11 +65,29 @@ Thank you for creating something inspiring enough to revisit months later.
   (Win11 24H2). Runs in the background with mouse parallax.
 - **Terminal mode** — renders *inside the terminal* using truecolor ANSI half-blocks
   (the same GPU pipeline), with frame-diffing and a resolution cap so it never stalls.
-- **Portable toolchain** — builds via `.deps` (mingw + cmake + ninja); **no vcpkg** and
-  nothing to install (upstream required vcpkg).
+- **Portable toolchain** — `setup.ps1` downloads MinGW-w64, cmake, ninja, and the GL
+  libraries into `.deps` (one-time, ~300 MB); **no vcpkg**, no admin, nothing system-wide.
 - **Headless render** (`--render`) — saves a high-res BMP for visual validation.
 
 ---
+
+## Requirements
+
+- **Windows 10/11** (64-bit) — wallpaper mode requires Win 11 24H2+
+- **GPU with OpenGL 4.3** — any NVIDIA GTX 600+, AMD Radeon HD 7000+, or Intel HD 4000+
+  (roughly 2012 or later); driver must be up to date
+
+## Install
+
+Run once to download the portable toolchain (~300 MB total):
+
+```powershell
+.\setup.ps1
+```
+
+This fetches MinGW-w64 (compiler + cmake + ninja) and the OpenGL libraries (GLEW, GLFW3,
+GLM) into `.deps\`. Nothing is installed system-wide. Re-running is safe — it skips
+anything already cached.
 
 ## Build
 
@@ -77,9 +95,8 @@ Thank you for creating something inspiring enough to revisit months later.
 .\build.ps1
 ```
 
-Produces `build\winlibs\BlackHole3D.exe` (GPU) and `BlackHole2D.exe` (2D lens). The
-portable toolchain lives in `.deps` — nothing to install. (For the classic vcpkg/apt path,
-see the [upstream README](https://github.com/kavan010/black_hole).)
+Produces `build\winlibs\BlackHole3D.exe` (GPU) and `BlackHole2D.exe` (2D lens).
+Re-run after any code change; the build script kills a running instance automatically.
 
 ## Run
 
