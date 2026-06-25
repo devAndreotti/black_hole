@@ -160,5 +160,6 @@ render.bmp
 bh_*.bmp
 # Ferramentas e notas locais
 .antigravitycli/
+.claude/
 backup_original/
 README.local.md
