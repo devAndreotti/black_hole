@@ -137,50 +137,8 @@
     .video-shell video {
       width: 100%; display: block;
     }
-    /*
-      VIDEO PLACEHOLDER — shown until demo.mp4 is added.
-      To add the video:
-        1. Record the simulation (see README for instructions).
-        2. Save the recording as  docs/demo.mp4  (keep it under 100 MB).
-        3. Remove the .placeholder div below.
-        4. Uncomment the <video> element.
-        5. git add docs/demo.mp4 && git commit + push.
-
-      Optional: embed a YouTube video instead.
-        Replace the entire .video-shell content with:
-        <div class="yt-wrap">
-          <iframe src="https://www.youtube.com/embed/YOUR_VIDEO_ID"
-                  allowfullscreen title="black_hole demo"></iframe>
-        </div>
-    */
-    .placeholder {
-      position: relative;
-      aspect-ratio: 16 / 9;
-      overflow: hidden;
-    }
-    .placeholder-img {
-      width: 100%; height: 100%;
-      object-fit: cover;
-      filter: brightness(.45);
-    }
-    .placeholder-body {
-      position: absolute; inset: 0;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      gap: .6rem;
-    }
-    .play-ring {
-      width: 60px; height: 60px;
-      border-radius: 50%;
-      border: 2px solid rgba(255,255,255,.2);
-      display: flex; align-items: center; justify-content: center;
-    }
-    .play-ring svg { width: 24px; height: 24px; fill: rgba(255,255,255,.45); margin-left: 3px; }
-    .placeholder-body p { color: rgba(255,255,255,.45); font-size: .88rem; }
-    .placeholder-body a { color: var(--amber); text-decoration: none; font-size: .82rem; }
-    .placeholder-body a:hover { text-decoration: underline; }
-
-    /* YouTube embed helper */
+    /* YouTube embed alternative: replace <video> with
+       <div class="yt-wrap"><iframe src="https://www.youtube.com/embed/ID" allowfullscreen></iframe></div> */
     .yt-wrap { position: relative; aspect-ratio: 16/9; }
     .yt-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 
@@ -301,56 +259,11 @@
   <h2>Demo</h2>
   <div class="video-shell">
 
-    <!--
-    ════════════════════════════════════════════════
-    HOW TO ADD THE DEMO VIDEO
-    ════════════════════════════════════════════════
-
-    Option A — local file (recommended for short clips):
-      1. Run:  .\run.ps1 --spin 0.9 --anim --blue --tilt 18
-      2. Press Win+Alt+R to start/stop recording (Xbox Game Bar).
-         File saved to:  %USERPROFILE%\Videos\Captures\
-      3. Trim to 20–40 s, keep under 100 MB.
-         Compress with ffmpeg if needed:
-           ffmpeg -i input.mp4 -crf 28 -preset slow docs\demo.mp4
-      4. Save as  docs/demo.mp4
-      5. Delete the .placeholder div below.
-      6. Uncomment the <video> element.
-      7. git add docs/demo.mp4 && git commit -m "docs: add demo video" && git push
-
-    Option B — YouTube embed:
-      1. Upload the video to YouTube.
-      2. Delete the entire .video-shell contents below.
-      3. Paste this in its place (replace VIDEO_ID):
-           <div class="yt-wrap">
-             <iframe src="https://www.youtube.com/embed/VIDEO_ID"
-                     allowfullscreen title="black_hole demo"></iframe>
-           </div>
-    ════════════════════════════════════════════════
-    -->
-
-    <!-- UNCOMMENT after adding docs/demo.mp4
     <video controls
            poster="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/hero.png"
            preload="metadata">
       <source src="demo.mp4" type="video/mp4">
     </video>
-    -->
-
-    <div class="placeholder">
-      <img class="placeholder-img"
-           src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/hero.png"
-           alt="">
-      <div class="placeholder-body">
-        <div class="play-ring">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-        </div>
-        <p>Demo video coming soon</p>
-        <a href="https://github.com/devAndreotti/black_hole" target="_blank" rel="noopener">
-          Build and run it locally →
-        </a>
-      </div>
-    </div>
 
   </div>
 </div>
