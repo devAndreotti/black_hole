@@ -71,6 +71,15 @@ Thank you for creating something inspiring enough to revisit months later.
   libraries into `.deps` (one-time, ~300 MB); **no vcpkg**, no admin, nothing system-wide.
 - **Headless render** (`--render`) — saves a high-res BMP for visual validation.
 
+### Quality of life
+- **Smooth Kerr-spin** — `K` / `.` / `,` ease the spin toward the target instead of
+  snapping, so the disk visibly morphs as the spacetime changes.
+- **Pause** (`Space`, window) — freeze on the current frame; press again to resume.
+- **Live title-bar HUD** (window) — shows the current spin, tilt, palette and fps.
+- **Session remembers the look** — zoom, steps **and** spin/tilt/palette are saved on
+  exit and restored next launch (any CLI flag like `--spin`/`--blue` still wins).
+- **Screenshot** (`S`) — writes the current frame to a timestamped BMP.
+
 ---
 
 ## Requirements
@@ -137,6 +146,7 @@ Summary:
 Key controls (work in window/terminal/wallpaper): `K` spin · `.`/`,` fine spin ·
 `T`/Shift+`T` tilt · `A` animation · `F` palette · `C` cinematic · `B` bloom · `M` grid ·
 `+`/`-` zoom · arrows orbit.
+Window-only: `Space` pause · `S` screenshot · `R` idle auto-orbit.
 
 ---
 

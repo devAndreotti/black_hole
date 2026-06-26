@@ -60,6 +60,9 @@ float g_renderTime = -1.0f;        // --time override for headless temporal vali
 bool  g_animate = true;            // moons/binary orbit (terminal/wallpaper always; window per autoRotate/A)
 bool  g_cinematic = false;         // scripted fly-through camera (--cinematic / key C)
 static bool g_autoRotate = true;   // window mode: idle auto-orbit (toggle with R)
+static bool  g_paused     = false; // window mode: Space freezes the simulation (last frame held)
+static float g_spinTarget = -1.0f; // active Kerr-spin lerp goal (<0 = none); K/./, ease toward it
+static constexpr float kSpinLerpRate = 1.5f;  // Kerr-spin units eased per second (0→0.9 ≈ 0.6 s)
 
 // Cinematic fly-through: a looping path that drifts face-on, dives toward the
 // photon ring (whipping around, edge-on), then pulls back out. Great for
@@ -126,17 +129,29 @@ bool updateGravityPhysics() {
 }
 
 // ── Session state ────────────────────────────────────────────────────────────
-static void loadSessionState(const std::string& mode) {
+// zoom/steps are per-mode; spin/tilt/palette are the global "look" shared by every
+// mode. The restore* flags let the caller keep a CLI override (--spin/--tilt/palette,
+// --legacy) from being clobbered by the saved look.
+static void loadSessionState(const std::string& mode,
+                             bool restoreSpin=true, bool restoreTilt=true, bool restorePalette=true) {
     int steps=600; float zoom=6.34194e10f;
     if (mode=="wallpaper") zoom=1.6e11f;
     else if (mode=="terminal") zoom=5.2e10f;
+    float spin=engine.kerrSpin, tilt=engine.bhTilt, pal=diskColorTint.a;   // defaults = current
+    bool haveSpin=false, haveTilt=false, havePal=false;
     std::ifstream f("session_state.txt"); std::string key; double val;
     while (f>>key>>val) {
-        if (key==mode+"_steps") steps=(int)val;
-        else if (key==mode+"_zoom") zoom=(float)val;
+        if (key==mode+"_steps")      steps=(int)val;
+        else if (key==mode+"_zoom")  zoom=(float)val;
+        else if (key=="spin")    { spin=(float)val; haveSpin=true; }
+        else if (key=="tilt")    { tilt=(float)val; haveTilt=true; }
+        else if (key=="palette") { pal=(float)val;  havePal=true;  }
     }
     engine.COMPUTE_STEPS=engine.COMPUTE_MOVING_STEPS=steps;
     camera.radius=glm::clamp(zoom,camera.minRadius,camera.maxRadius);
+    if (restoreSpin    && haveSpin) engine.kerrSpin = glm::clamp(spin, 0.0f, 1.0f);
+    if (restoreTilt    && haveTilt) engine.bhTilt   = tilt;
+    if (restorePalette && havePal)  { int m=(int)std::round(pal); if (m>=1 && m<=5) diskColorTint.a=float(m); }
     camera.update();
 }
 
@@ -146,6 +161,11 @@ void saveSessionState(const std::string& mode) {
     while (fi>>k>>v) state[k]=v;
     state[mode+"_steps"]=engine.COMPUTE_STEPS;
     state[mode+"_zoom"]=camera.radius;
+    // Global look (shared across modes). If a spin lerp is mid-flight, persist the
+    // intended target so the next launch restores where the user was heading.
+    state["spin"]    = (g_spinTarget>=0.0f) ? g_spinTarget : engine.kerrSpin;
+    state["tilt"]    = engine.bhTilt;
+    state["palette"] = std::round(diskColorTint.a);
     std::ofstream fo("session_state.txt", std::ios::trunc);
     for (auto& [k2,v2]:state) fo<<k2<<" "<<v2<<"\n";
 }
@@ -175,6 +195,26 @@ static void saveScreenshot(int w, int h) {
         f.write(reinterpret_cast<char*>(row.data()),stride);
     }
     std::cout<<"[INFO] Screenshot: "<<name<<" ("<<w<<"x"<<h<<")\n";
+}
+
+// ── Live window-title HUD (window mode) ───────────────────────────────────────
+// Turns the title bar into a free heads-up display: current spin / tilt / palette
+// / fps (+ PAUSED). Throttled to twice a second; fps measured over that window.
+static void updateWindowTitle() {
+    static double t0 = glfwGetTime();
+    static int    frames = 0;
+    static double fps = 0.0;
+    ++frames;
+    double now = glfwGetTime(), dt = now - t0;
+    if (dt >= 0.5) { if (dt < 2.0) fps = frames / dt;  // ignore idle gaps (TAA settled)
+                     frames = 0; t0 = now; }
+    int m = (int)std::round(diskColorTint.a); if (m < 1 || m > 5) m = 1;
+    char title[192];
+    std::snprintf(title, sizeof(title),
+        "black_hole  |  a* %.2f  |  tilt %.0f deg  |  %s  |  %.0f fps%s",
+        engine.kerrSpin, engine.bhTilt * 180.0f / float(M_PI),
+        kColorModeNames[m], fps, g_paused ? "   [PAUSED]" : "");
+    glfwSetWindowTitle(engine.window, title);
 }
 
 // ── Headless high-res render to BMP (--render): for visual validation ─────────
@@ -247,20 +287,27 @@ void setupCameraCallbacks(GLFWwindow* win) {
                                    std::cout<<"[INFO] Cinematic: "<<(g_cinematic?"ON":"OFF")<<"\n"; }
             if (key==GLFW_KEY_Q||key==GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w,GLFW_TRUE);
             if (key==GLFW_KEY_S) saveScreenshot(engine.WIDTH, engine.HEIGHT);
+            if (key==GLFW_KEY_SPACE) { g_paused=!g_paused; cam->dirty=true;
+                                       std::cout<<"[INFO] Paused: "<<(g_paused?"ON":"OFF")<<"\n"; }
             if (key==GLFW_KEY_B) { engine.bloomEnabled=!engine.bloomEnabled; cam->dirty=true; }
             if (key==GLFW_KEY_A) { engine.diskAnimEnabled=!engine.diskAnimEnabled; cam->dirty=true;
                                    std::cout<<"[INFO] Disk animation: "<<(engine.diskAnimEnabled?"ON":"OFF")<<"\n"; }
+            // K toggles spin; the main loop eases kerrSpin toward the target so the
+            // disk morphs smoothly instead of snapping. Toggle off the in-flight
+            // target if a lerp is already running.
             if (key==GLFW_KEY_K) {
-                engine.kerrSpin = (engine.kerrSpin < 0.01f) ? kKerrSpinOn : 0.0f;
+                float ref = (g_spinTarget>=0.0f) ? g_spinTarget : engine.kerrSpin;
+                g_spinTarget = (ref < 0.01f) ? kKerrSpinOn : 0.0f;
                 cam->dirty=true;
-                std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
+                std::cout<<"[INFO] Kerr spin -> "<<g_spinTarget<<"\n";
             }
-            // Fine Kerr-spin control: '.' raises, ',' lowers (clamped to [0,1]).
+            // Fine Kerr-spin control: '.' raises, ',' lowers (clamped to [0,1]); eased.
             if (key==GLFW_KEY_PERIOD || key==GLFW_KEY_COMMA) {
+                float ref = (g_spinTarget>=0.0f) ? g_spinTarget : engine.kerrSpin;
                 float d = (key==GLFW_KEY_PERIOD) ? kKerrSpinStep : -kKerrSpinStep;
-                engine.kerrSpin = glm::clamp(engine.kerrSpin + d, 0.0f, 1.0f);
+                g_spinTarget = glm::clamp(ref + d, 0.0f, 1.0f);
                 cam->dirty=true;
-                std::cout<<"[INFO] Kerr spin: "<<engine.kerrSpin<<"\n";
+                std::cout<<"[INFO] Kerr spin -> "<<g_spinTarget<<"\n";
             }
             // BH tilt: T tips the disk/spin/jets +5°, Shift+T −5° (live).
             if (key==GLFW_KEY_T) {
@@ -303,6 +350,8 @@ int main(int argc, char** argv) {
     bool wallpaperMode=false, terminalMode=false, dcompMode=false, runTests=false, legacyMode=false;
     bool renderMode=false; int rW=900, rH=600; float rElev=1.35f, rAzim=0.6f; double rZoom=1.05e11;
     const char* rOut="render.bmp";
+    // Track which "look" knobs the CLI set so the saved session never overrides them.
+    bool cliSpin=false, cliTilt=false, cliPalette=false;
     for (int i=1;i<argc;++i) {
         if (!strcmp(argv[i],"--wallpaper")||!strcmp(argv[i],"-w")) wallpaperMode=true;
         else if (!strcmp(argv[i],"--terminal")||!strcmp(argv[i],"-t")) terminalMode=true;
@@ -311,12 +360,12 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i],"--no-disk"))  showDisk=false;
         else if (!strcmp(argv[i],"--no-beam"))  showBeam=false;
         else if (!strcmp(argv[i],"--test"))     runTests=true;
-        else if (!strcmp(argv[i],"--red"))   diskColorTint=vec4(0,0,0,2);
-        else if (!strcmp(argv[i],"--white")) diskColorTint=vec4(0,0,0,3);
-        else if (!strcmp(argv[i],"--blue"))  diskColorTint=vec4(0,0,0,4);
-        else if (!strcmp(argv[i],"--green")) diskColorTint=vec4(0,0,0,5);
-        else if (!strcmp(argv[i],"--spin") && i+1<argc) { engine.kerrSpin=atof(argv[++i]); }
-        else if (!strcmp(argv[i],"--tilt") && i+1<argc) { engine.bhTilt=atof(argv[++i])*float(M_PI)/180.0f; }
+        else if (!strcmp(argv[i],"--red"))   { diskColorTint=vec4(0,0,0,2); cliPalette=true; }
+        else if (!strcmp(argv[i],"--white")) { diskColorTint=vec4(0,0,0,3); cliPalette=true; }
+        else if (!strcmp(argv[i],"--blue"))  { diskColorTint=vec4(0,0,0,4); cliPalette=true; }
+        else if (!strcmp(argv[i],"--green")) { diskColorTint=vec4(0,0,0,5); cliPalette=true; }
+        else if (!strcmp(argv[i],"--spin") && i+1<argc) { engine.kerrSpin=atof(argv[++i]); cliSpin=true; }
+        else if (!strcmp(argv[i],"--tilt") && i+1<argc) { engine.bhTilt=atof(argv[++i])*float(M_PI)/180.0f; cliTilt=true; }
         else if (!strcmp(argv[i],"--cinematic")) g_cinematic=true;
         else if (!strcmp(argv[i],"--anim"))  engine.diskAnimEnabled=true;
         else if (!strcmp(argv[i],"--legacy")||!strcmp(argv[i],"-l")||!strcmp(argv[i],"legacy")) legacyMode=true;
@@ -338,6 +387,7 @@ int main(int argc, char** argv) {
             glDeleteProgram(engine.computeProgram); engine.computeProgram = p;
             try { engine.lastShaderMtime = fs::last_write_time(resourcePath("geodesic_legacy.comp")); } catch (...) {}
             engine.kerrSpin = 0.0f; engine.diskAnimEnabled = false;  // legacy has no Kerr/anim
+            cliSpin = true;   // don't let the saved session re-enable spin under legacy
             std::cout << "[INFO] LEGACY: shader Schwarzschild original (geodesic_legacy.comp); Kerr/anim desativados\n";
         } else {
             std::cerr << "[WARN] geodesic_legacy.comp nao encontrado; seguindo com shader atual\n";
@@ -353,16 +403,20 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     if (wallpaperMode) g_currentMode="wallpaper";
 #endif
-    loadSessionState(g_currentMode);
+    // Apply the saved session for this mode, but keep any CLI "look" override intact.
+    auto restoreSession = [&](const std::string& mode){
+        loadSessionState(mode, !cliSpin, !cliTilt, !cliPalette);
+    };
+    restoreSession(g_currentMode);
 
 #ifdef _WIN32
     if (terminalMode) {
-        g_currentMode="terminal"; loadSessionState(g_currentMode);
+        g_currentMode="terminal"; restoreSession(g_currentMode);
         runTerminal(engine); saveSessionState(g_currentMode);
         glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
     }
     if (dcompMode) {
-        g_currentMode="wallpaper"; loadSessionState(g_currentMode);
+        g_currentMode="wallpaper"; restoreSession(g_currentMode);
         runWallpaperDComp(engine.window, engine); saveSessionState(g_currentMode);
         glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
     }
@@ -375,10 +429,10 @@ int main(int argc, char** argv) {
             engine.COMPUTE_MOVING_HEIGHT = std::max(135, engine.HEIGHT/6);
             engine.COMPUTE_MOVING_STEPS  = engine.COMPUTE_STEPS;
             std::cout<<"[INFO] Wallpaper "<<engine.WIDTH<<"x"<<engine.HEIGHT<<"\n";
-        } else { wallpaperMode=false; g_currentMode="window"; loadSessionState(g_currentMode); }
+        } else { wallpaperMode=false; g_currentMode="window"; restoreSession(g_currentMode); }
     }
 #else
-    if (wallpaperMode) { wallpaperMode=false; g_currentMode="window"; loadSessionState(g_currentMode); }
+    if (wallpaperMode) { wallpaperMode=false; g_currentMode="window"; restoreSession(g_currentMode); }
 #endif
 
     if (!wallpaperMode) {
@@ -398,6 +452,25 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
         if (wallpaperMode) wallpaperUpdate(engine.window);
 #endif
+        // Space (window mode): freeze on the last drawn frame, but keep pumping events
+        // so Space can resume. Skipped in wallpaper mode (g_paused never set there).
+        if (g_paused && !wallpaperMode) {
+            updateWindowTitle(); glfwWaitEventsTimeout(1.0/30.0); continue;
+        }
+        // Ease the Kerr spin toward its target (set by K/./,) so the disk morphs
+        // smoothly. While easing we hold the frame dirty so it re-renders each step.
+        {
+            static double lastT = glfwGetTime();
+            double nowT = glfwGetTime();
+            float  dt   = glm::clamp(float(nowT - lastT), 0.0f, 0.1f);
+            lastT = nowT;
+            if (g_spinTarget >= 0.0f) {
+                float diff = g_spinTarget - engine.kerrSpin, step = kSpinLerpRate * dt;
+                if (std::fabs(diff) <= step) { engine.kerrSpin = g_spinTarget; g_spinTarget = -1.0f; }
+                else engine.kerrSpin += (diff > 0.0f ? step : -step);
+                camera.dirty = true;
+            }
+        }
         // Disk animation always re-renders (no accumulation)
         if (engine.diskAnimEnabled) { camera.dirty=true; accumSample=0; }
 
@@ -431,6 +504,7 @@ int main(int argc, char** argv) {
         }
         engine.drawFullScreenQuad();
         glfwSwapBuffers(engine.window); glfwPollEvents();
+        if (!wallpaperMode) updateWindowTitle();
     }
     saveSessionState(g_currentMode);
     glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
