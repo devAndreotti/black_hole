@@ -11,14 +11,12 @@ including as a **live Windows wallpaper** and **inside the terminal**.
 
 <p align="center"><sub>Rendered headless with <code>--render --spin 0.9 --tilt 18 --anim --blue --zoom 4.5e11</code></sub></p>
 
-<p align="center">
-  <a href="https://devandreotti.github.io/black_hole/">🌐 devandreotti.github.io/black_hole</a>
-</p>
-
 > **This is a fork.**
 > Original upstream: **[kavan010/black_hole](https://github.com/kavan010/black_hole)** —
 > credit to the author for the base (ray-tracing, accretion disk, spacetime grid).
 > Fork: **[devAndreotti/black_hole](https://github.com/devAndreotti/black_hole)**.
+>
+> <a href="https://devandreotti.github.io/black_hole/">🌐 devandreotti.github.io/black_hole</a>
 
 ---
 
