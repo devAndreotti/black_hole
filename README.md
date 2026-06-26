@@ -6,7 +6,7 @@ with extended physics (Kerr), cinematic post-processing, and three new ways to r
 including as a **live Windows wallpaper** and **inside the terminal**.
 
 <p align="center">
-  <img src="assets/hero.png" alt="Lensed blue accretion disk arcing over the shadow, a relativistic jet, a lensed spiral galaxy and a green companion sun — rendered by this project" width="100%">
+  <img src="assets/terminal.png" alt="Lensed blue accretion disk arcing over the shadow, a relativistic jet, a lensed spiral galaxy and a green companion sun — rendered by this project" width="100%">
 </p>
 
 <p align="center"><sub>Rendered headless with <code>--render --spin 0.9 --tilt 18 --anim --blue --zoom 4.5e11</code></sub></p>
