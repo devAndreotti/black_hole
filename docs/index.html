@@ -172,6 +172,80 @@
     .yt-wrap { position: relative; aspect-ratio: 16/9; }
     .yt-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 
+    /* ── Gallery ──────────────────────────────────────────── */
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .shot {
+      position: relative; display: block; text-decoration: none;
+      border-radius: var(--radius); overflow: hidden;
+      border: 1px solid var(--border); background: var(--surface);
+      cursor: zoom-in;
+    }
+    .shot img {
+      width: 100%; aspect-ratio: 16/10; object-fit: cover; display: block;
+      filter: brightness(.9);
+      transition: transform .45s ease, filter .45s ease;
+    }
+    .shot:hover img { transform: scale(1.06); filter: brightness(1.06); }
+    .shot-cap {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: 1.6rem .9rem .7rem;
+      background: linear-gradient(to top, rgba(5,5,15,.93), rgba(5,5,15,0));
+      pointer-events: none;
+    }
+    .shot-cap b    { display: block; color: #fff; font-size: .9rem; font-weight: 600; }
+    .shot-cap span { color: rgba(255,255,255,.6); font-size: .76rem; }
+
+    /* ── Lightbox ─────────────────────────────────────────── */
+    .lightbox {
+      position: fixed; inset: 0; z-index: 200;
+      display: none; align-items: center; justify-content: center;
+      padding: 2rem; cursor: zoom-out;
+      background: rgba(2,2,8,.93);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    }
+    .lightbox.open { display: flex; }
+    .lightbox img {
+      max-width: 100%; max-height: 100%; border-radius: 8px;
+      box-shadow: 0 24px 90px rgba(0,0,0,.75);
+    }
+    .lightbox-close {
+      position: absolute; top: .9rem; right: 1.4rem;
+      color: #fff; font-size: 2.2rem; line-height: 1; opacity: .65; cursor: pointer;
+    }
+    .lightbox-close:hover { opacity: 1; }
+
+    /* ── Copy button (injected into every <pre>) ──────────── */
+    .copy-btn {
+      position: absolute; top: .4rem; right: .4rem;
+      padding: .18rem .5rem; border-radius: 5px;
+      background: rgba(255,255,255,.06); border: 1px solid var(--border2);
+      color: var(--muted); font-size: .66rem; font-family: inherit;
+      cursor: pointer; opacity: 0;
+      transition: opacity .15s, color .15s, background .15s;
+    }
+    pre:hover .copy-btn { opacity: 1; }
+    .copy-btn:hover  { color: var(--amber); background: rgba(245,166,35,.12); }
+    .copy-btn.copied { color: #3ecf6a; border-color: rgba(62,207,106,.4); opacity: 1; }
+
+    /* ── Badges bar ───────────────────────────────────────── */
+    .badges-bar {
+      display: flex; justify-content: center; gap: .5rem; flex-wrap: wrap;
+      padding: 1.2rem 2rem .2rem;
+    }
+    .badges-bar img { height: 20px; display: block; }
+
+    /* ── Scroll reveal (only hides when JS is active) ─────── */
+    html.js .reveal     { opacity: 0; transform: translateY(18px); }
+    html.js .reveal.in  { opacity: 1; transform: none;
+                          transition: opacity .6s ease, transform .6s ease; }
+    @media (prefers-reduced-motion: reduce) {
+      html.js .reveal { opacity: 1; transform: none; }
+    }
+
     /* ── Run modes ────────────────────────────────────────── */
     .modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
     .mode-card {
@@ -247,6 +321,7 @@
     .step-b { min-width: 0; }
     .step-b label { display: block; font-size: .82rem; color: var(--muted); margin-bottom: .35rem; }
     pre {
+      position: relative;
       background: #030309; border: 1px solid var(--border); border-radius: 7px;
       padding: .7rem 1.05rem;
       font-family: 'Cascadia Code','Fira Code',Consolas,monospace;
@@ -307,6 +382,7 @@
       .pal-card { min-width: 100px; padding: .9rem .75rem .85rem; }
     }
   </style>
+  <script>document.documentElement.className += ' js';</script>
 </head>
 <body>
 
@@ -315,6 +391,7 @@
   <a class="nav-logo" href="#">black<em>_</em>hole</a>
   <div class="nav-scroll">
     <a href="#demo">Demo</a>
+    <a href="#gallery">Gallery</a>
     <a href="#modes">Modes</a>
     <a href="#features">Features</a>
     <a href="#install">Install</a>
@@ -362,6 +439,16 @@
   </div>
 </div>
 
+<!-- ── Live badges ───────────────────────────────────────────── -->
+<div class="badges-bar">
+  <a href="https://github.com/devAndreotti/black_hole/stargazers" target="_blank" rel="noopener">
+    <img src="https://img.shields.io/github/stars/devAndreotti/black_hole?style=flat-square&logo=github&label=stars&color=f5a623&labelColor=12122a" alt="GitHub stars">
+  </a>
+  <img src="https://img.shields.io/github/languages/top/devAndreotti/black_hole?style=flat-square&color=5ab0ff&labelColor=12122a" alt="Top language">
+  <img src="https://img.shields.io/github/last-commit/devAndreotti/black_hole?style=flat-square&color=5ab0ff&labelColor=12122a" alt="Last commit">
+  <img src="https://img.shields.io/github/repo-size/devAndreotti/black_hole?style=flat-square&color=5e6480&labelColor=12122a" alt="Repo size">
+</div>
+
 <!-- ── Stats ribbon ──────────────────────────────────────────── -->
 <div class="stats-ribbon">
   <div class="stat">
@@ -387,7 +474,7 @@
 </div>
 
 <!-- ── Demo ─────────────────────────────────────────────────── -->
-<div id="demo" class="wrap">
+<div id="demo" class="wrap reveal">
   <h2>Demo</h2>
   <div class="video-shell">
     <video controls
@@ -404,8 +491,46 @@
   </div>
 </div>
 
+<!-- ── Gallery ───────────────────────────────────────────────── -->
+<div id="gallery" class="wrap reveal">
+  <h2>Gallery</h2>
+  <div class="gallery">
+
+    <a class="shot" href="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/hero.png">
+      <img src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/hero.png"
+           alt="Blue accretion disk with a lensed spiral galaxy, polar jet and green companion star" loading="lazy">
+      <div class="shot-cap"><b>Blue palette</b><span>Lensed galaxy · polar jet · companion star</span></div>
+    </a>
+
+    <a class="shot" href="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/default.png">
+      <img src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/default.png"
+           alt="Edge-on gold accretion disk with twin jets and a red giant companion" loading="lazy">
+      <div class="shot-cap"><b>Default palette</b><span>Edge-on disk · twin jets · red giant</span></div>
+    </a>
+
+    <a class="shot" href="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/white.png">
+      <img src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/white.png"
+           alt="Silver-white accretion disk with a green companion star" loading="lazy">
+      <div class="shot-cap"><b>White palette</b><span>Silver disk · green companion</span></div>
+    </a>
+
+    <a class="shot" href="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/terminal.png">
+      <img src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/terminal.png"
+           alt="The black hole rendered inside a terminal with truecolor text cells" loading="lazy">
+      <div class="shot-cap"><b>Terminal mode</b><span>Rendered in truecolor text cells</span></div>
+    </a>
+
+    <a class="shot" href="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/green.png">
+      <img src="https://raw.githubusercontent.com/devAndreotti/black_hole/main/assets/green.png"
+           alt="The simulation running as a live wallpaper behind the desktop" loading="lazy">
+      <div class="shot-cap"><b>Wallpaper mode</b><span>Running live behind the desktop</span></div>
+    </a>
+
+  </div>
+</div>
+
 <!-- ── Run modes ─────────────────────────────────────────────── -->
-<div id="modes" class="wrap">
+<div id="modes" class="wrap reveal">
   <h2>Run modes</h2>
   <div class="modes">
 
@@ -443,7 +568,7 @@
 </div>
 
 <!-- ── Color palettes ─────────────────────────────────────────── -->
-<div class="wrap">
+<div class="wrap reveal">
   <h2>Color palettes</h2>
   <div class="palettes">
 
@@ -485,7 +610,7 @@
 </div>
 
 <!-- ── Features ─────────────────────────────────────────────── -->
-<div id="features" class="wrap">
+<div id="features" class="wrap reveal">
   <h2>What it does</h2>
   <div class="grid">
 
@@ -529,7 +654,7 @@
 </div>
 
 <!-- ── Quick start ───────────────────────────────────────────── -->
-<div id="install" class="wrap">
+<div id="install" class="wrap reveal">
   <h2>Quick start</h2>
   <div class="steps">
 
@@ -566,24 +691,34 @@
 </div>
 
 <!-- ── Controls ──────────────────────────────────────────────── -->
-<div class="wrap">
+<div class="wrap reveal">
   <h2>Key controls</h2>
   <div class="ctrl-grid">
-    <div class="ctrl-row"><kbd>K</kbd>        <span class="ctrl-label">Toggle Kerr spin (rotating BH)</span></div>
+    <div class="ctrl-row"><kbd>Space</kbd>   <span class="ctrl-label">Pause / resume the simulation</span></div>
+    <div class="ctrl-row"><kbd>K</kbd>        <span class="ctrl-label">Toggle Kerr spin — eased, the disk morphs</span></div>
+    <div class="ctrl-row"><kbd>. / ,</kbd>   <span class="ctrl-label">Fine-tune Kerr spin ±0.1 (eased)</span></div>
     <div class="ctrl-row"><kbd>F</kbd>        <span class="ctrl-label">Cycle color palette</span></div>
     <div class="ctrl-row"><kbd>T</kbd>        <span class="ctrl-label">Tilt BH axis +5° (Shift = −5°)</span></div>
     <div class="ctrl-row"><kbd>A</kbd>        <span class="ctrl-label">Toggle animation (disk + moons)</span></div>
     <div class="ctrl-row"><kbd>C</kbd>        <span class="ctrl-label">Cinematic camera path</span></div>
+    <div class="ctrl-row"><kbd>R</kbd>        <span class="ctrl-label">Toggle idle auto-orbit (window)</span></div>
     <div class="ctrl-row"><kbd>B</kbd>        <span class="ctrl-label">Toggle bloom</span></div>
     <div class="ctrl-row"><kbd>M</kbd>        <span class="ctrl-label">Spacetime curvature grid</span></div>
-    <div class="ctrl-row"><kbd>. / ,</kbd>   <span class="ctrl-label">Fine-tune Kerr spin ±0.1</span></div>
+    <div class="ctrl-row"><kbd>S</kbd>        <span class="ctrl-label">Save a screenshot (BMP)</span></div>
     <div class="ctrl-row"><kbd>+ / −</kbd>   <span class="ctrl-label">Zoom in / out</span></div>
     <div class="ctrl-row"><kbd>↑↓←→</kbd>   <span class="ctrl-label">Orbit camera</span></div>
   </div>
+  <p style="margin-top:1rem; font-size:.8rem; color:var(--muted);">
+    The title bar shows a live HUD — current spin, tilt, palette and fps.
+    Most keys work in window, terminal and wallpaper modes;
+    <kbd style="font-size:.72rem;background:var(--surface2);border:1px solid var(--border2);border-bottom-width:2px;padding:.05rem .3rem;border-radius:4px;color:#fff;">Space</kbd>,
+    <kbd style="font-size:.72rem;background:var(--surface2);border:1px solid var(--border2);border-bottom-width:2px;padding:.05rem .3rem;border-radius:4px;color:#fff;">S</kbd> and
+    <kbd style="font-size:.72rem;background:var(--surface2);border:1px solid var(--border2);border-bottom-width:2px;padding:.05rem .3rem;border-radius:4px;color:#fff;">R</kbd> are window-mode.
+  </p>
 </div>
 
 <!-- ── Requirements ──────────────────────────────────────────── -->
-<div class="wrap">
+<div class="wrap reveal">
   <h2>Requirements</h2>
   <div class="reqs">
 
@@ -623,6 +758,55 @@
   </div>
   <p>License follows the upstream project</p>
 </footer>
+
+<!-- ── Lightbox overlay ──────────────────────────────────────── -->
+<div class="lightbox" id="lightbox">
+  <span class="lightbox-close" aria-hidden="true">&times;</span>
+  <img src="" alt="Expanded screenshot">
+</div>
+
+<script>
+  // Copy-to-clipboard button on every code block.
+  document.querySelectorAll('pre').forEach(function (pre) {
+    var text = pre.innerText;                       // capture before adding the button
+    var btn = document.createElement('button');
+    btn.className = 'copy-btn'; btn.type = 'button'; btn.textContent = 'Copy';
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      navigator.clipboard.writeText(text.trim()).then(function () {
+        btn.textContent = 'Copied'; btn.classList.add('copied');
+        setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
+      });
+    });
+    pre.appendChild(btn);
+  });
+
+  // Lightbox: click a gallery shot to open the full-size image.
+  var lb = document.getElementById('lightbox');
+  var lbImg = lb.querySelector('img');
+  function closeLb() { lb.classList.remove('open'); lbImg.src = ''; }
+  document.querySelectorAll('.shot').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      lbImg.src = a.getAttribute('href');
+      lb.classList.add('open');
+    });
+  });
+  lb.addEventListener('click', closeLb);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLb(); });
+
+  // Scroll reveal: fade sections in as they enter the viewport.
+  if ('IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add('in'); obs.unobserve(en.target); }
+      });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(function (el) { obs.observe(el); });
+  } else {
+    document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('in'); });
+  }
+</script>
 
 </body>
 </html>
