@@ -27,6 +27,7 @@ struct Engine {
     float kerrSpin = 0.0f;
     float bhTilt = 0.0f;          // BH symmetry-axis tilt (radians); spin axis follows
     bool diskAnimEnabled = false;
+    float mergerTime = -1.0f;   // seconds since W-key merger wave (<0 = inactive)
 
     int WIDTH = 800, HEIGHT = 600;
     int COMPUTE_WIDTH  = 320, COMPUTE_HEIGHT  = 240;

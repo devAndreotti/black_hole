@@ -412,6 +412,7 @@ void Engine::uploadCameraUBO(const Camera& cam, int rw, int rh, int steps, float
         float time;
         int diskAnim;
         float bhTilt;
+        float mergerTime;
     } data;
     vec3 fwd = normalize(cam.target - cam.position());
     vec3 up  = vec3(0,1,0);
@@ -429,6 +430,7 @@ void Engine::uploadCameraUBO(const Camera& cam, int rw, int rh, int steps, float
     data.time = (g_renderTime >= 0.0f) ? g_renderTime : (float)glfwGetTime();
     data.diskAnim = diskAnimEnabled ? 1 : 0;
     data.bhTilt = bhTilt;
+    data.mergerTime = mergerTime;
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UBOData), &data);
 }

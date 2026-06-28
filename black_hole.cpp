@@ -41,19 +41,21 @@ const std::vector<std::string> numStrs = initNumStrs();
 Camera camera;
 BlackHole SagA(vec3(0.0f), 8.54e36);
 std::vector<ObjectData> objects = {
-    { vec4( 3.6e11f, 1.8e11f,  0.8e11f, 4e10f), vec4(0,0,1,1), 1.98892e30f },  // blue (raised)
-    { vec4( 0.6e11f,-2.2e11f,  3.6e11f, 4e10f), vec4(1,0,0,1), 1.98892e30f },  // red (low, +Z)
-    { vec4(-3.8e11f, 1.0e11f, -1.6e11f, 7e10f), vec4(0,1,0,1), 1.98892e30f },  // green (raised, -Z)
-    { vec4(0,0,0,(float)SagA.r_s), vec4(0,0,0,1), (float)SagA.mass },
-    // Moons (Etapa E): small, dim bodies orbiting the suns. Dim colour (max<0.7)
-    // → no corona/flare; they lens and vanish behind the BH via the existing object
-    // logic. Positions are driven kinematically by updateMoons() (animated with A).
-    { vec4(5.1e11f,0,0,9e9f),    vec4(0.45f,0.50f,0.60f,1), 1e22f },  // orbits blue (0)
-    { vec4(0,0,5.4e11f,8e9f),    vec4(0.58f,0.46f,0.40f,1), 1e22f },  // orbits red  (1)
-    { vec4(-6.1e11f,0,0,1.1e10f),vec4(0.48f,0.52f,0.55f,1), 1e22f },  // orbits green (2)
-    // Binary companion: a bright orange star in a tight orbit around the blue sun
-    // (idx 0) — gets a corona; no flare; orbits with A like the moons.
-    { vec4(4.7e11f,0,0,2.2e10f), vec4(1.0f,0.62f,0.25f,1), 8e29f },   // companion of blue (0)
+    // ── Stars ──────────────────────────────────────────────────────────────────
+    { vec4( 3.6e11f, 1.8e11f,  0.8e11f, 4e10f), vec4(0,0,1,1),              1.98892e30f },  // [0] blue
+    { vec4( 0.6e11f,-2.2e11f,  3.6e11f, 4e10f), vec4(1,0,0,1),              1.98892e30f },  // [1] red
+    { vec4(-3.8e11f, 1.0e11f, -1.6e11f, 7e10f), vec4(0,1,0,1),              1.98892e30f },  // [2] green
+    // ── Black hole ─────────────────────────────────────────────────────────────
+    { vec4(0,0,0,(float)SagA.r_s), vec4(0,0,0,1), (float)SagA.mass },                       // [3] BH
+    // ── Planets (color.a = type: 10=ocean 11=rocky 12=desert 13=volcanic 14=jungle) ──
+    { vec4(5.1e11f,0,0,   1.0e10f), vec4(0.10f,0.15f,0.20f,10.0f), 1e22f },  // [4] ocean    (blue)
+    { vec4(0,0,5.4e11f,   9.0e9f),  vec4(0.20f,0.18f,0.15f,11.0f), 1e22f },  // [5] rocky    (red)
+    { vec4(-6.1e11f,0,0,  1.2e10f), vec4(0.25f,0.18f,0.08f,12.0f), 1e22f },  // [6] desert   (green)
+    // ── Binary companion (orange star orbiting blue) ────────────────────────────
+    { vec4(4.7e11f,0,0,2.2e10f),    vec4(1.0f,0.62f,0.25f,1.0f),   8e29f },   // [7] companion
+    // ── Two extra planets ──────────────────────────────────────────────────────
+    { vec4(8.5e11f,0,0,   1.1e10f), vec4(0.12f,0.07f,0.05f,13.0f), 1e22f },  // [8] volcanic (blue, far)
+    { vec4(0,0,9.5e11f,   1.3e10f), vec4(0.08f,0.15f,0.08f,14.0f), 1e22f },  // [9] jungle   (red, far)
 };
 std::string g_currentMode = "window";
 float g_renderTime = -1.0f;        // --time override for headless temporal validation
@@ -63,6 +65,30 @@ static bool g_autoRotate = true;   // window mode: idle auto-orbit (toggle with 
 static bool  g_paused     = false; // window mode: Space freezes the simulation (last frame held)
 static float g_spinTarget = -1.0f; // active Kerr-spin lerp goal (<0 = none); K/./, ease toward it
 static constexpr float kSpinLerpRate = 1.5f;  // Kerr-spin units eased per second (0→0.9 ≈ 0.6 s)
+
+// ── Scene presets (key P cycles; --preset name at startup) ──────────────────
+struct Preset { const char* name; float spin, tiltDeg; int palette; float zoom; bool anim; };
+static const Preset kPresets[] = {
+    { "classic",      0.0f,  0.0f, CMODE_DEFAULT, 6.3e10f, false },
+    { "supermassive", 0.9f, 18.0f, CMODE_BLUE,    4.5e11f, true  },
+    { "edge-on",      0.5f, 85.0f, CMODE_RED,     5.0e10f, true  },
+    { "verdant",      0.3f, 12.0f, CMODE_GREEN,   1.2e11f, true  },
+    { "polar",        0.7f, 45.0f, CMODE_WHITE,   8.0e10f, false },
+};
+static constexpr int kNumPresets = (int)(sizeof(kPresets)/sizeof(kPresets[0]));
+static int   g_presetIdx     = -1;   // -1 = no preset active
+static float g_mergerElapsed = -1.0f;  // seconds since W-key merger wave (<0 = off)
+
+static void applyPreset(int idx) {
+    const Preset& p = kPresets[idx];
+    g_spinTarget           = p.spin;
+    engine.bhTilt          = p.tiltDeg * float(M_PI) / 180.0f;
+    diskColorTint.a        = float(p.palette);
+    camera.radius          = glm::clamp(p.zoom, camera.minRadius, camera.maxRadius);
+    engine.diskAnimEnabled = p.anim;
+    camera.dirty           = true;
+    std::cout << "[INFO] Preset: " << p.name << "\n";
+}
 
 // Cinematic fly-through: a looping path that drifts face-on, dives toward the
 // photon ring (whipping around, edge-on), then pulls back out. Great for
@@ -87,10 +113,12 @@ static void updateMoons() {
     float t = (g_renderTime >= 0.0f) ? g_renderTime : (float)glfwGetTime();
     struct M { int mi, pi; float R, w, ph; vec3 axis; };
     static const M m[] = {
-        { 4, 0, 1.1e11f, 0.55f, 0.0f, vec3(0,1,0) },
-        { 5, 1, 1.4e11f, 0.42f, 2.1f, vec3(0.35f,1,0.2f) },
-        { 6, 2, 2.1e11f, 0.32f, 4.0f, vec3(0,1,0.4f) },
-        { 7, 0, 7.0e10f, 0.90f, 1.0f, vec3(0.2f,1,0.3f) },   // tight binary companion
+        { 4, 0, 1.1e11f, 0.55f, 0.0f, vec3(0,1,0)        },  // ocean planet (blue, inner)
+        { 5, 1, 1.4e11f, 0.42f, 2.1f, vec3(0.35f,1,0.2f) },  // rocky planet (red)
+        { 6, 2, 2.1e11f, 0.32f, 4.0f, vec3(0,1,0.4f)     },  // desert planet (green)
+        { 7, 0, 7.0e10f, 0.90f, 1.0f, vec3(0.2f,1,0.3f)  },  // binary companion (blue, tight)
+        { 8, 0, 2.4e11f, 0.28f, 3.2f, vec3(0.15f,1,0.1f) },  // volcanic planet (blue, outer)
+        { 9, 1, 3.2e11f, 0.22f, 1.5f, vec3(0.4f,1,0.3f)  },  // jungle planet (red, outer)
     };
     for (const auto& o : m) {
         if (o.mi >= (int)objects.size()) continue;
@@ -269,6 +297,10 @@ void setupCameraCallbacks(GLFWwindow* win) {
     glfwSetKeyCallback(win, [](GLFWwindow* w,int key,int sc,int act,int mods){
         Camera* cam=(Camera*)glfwGetWindowUserPointer(w);
         if (act==GLFW_PRESS && key==GLFW_KEY_G) { Gravity=!Gravity; cam->update(); }
+        if (act==GLFW_PRESS && key==GLFW_KEY_W) {
+            g_mergerElapsed = 0.0f; engine.mergerTime = 0.0f; cam->dirty=true;
+            std::cout<<"[INFO] Merger wave triggered\n";
+        }
         if (act==GLFW_PRESS||act==GLFW_REPEAT) {
             if (key==GLFW_KEY_LEFT)  { cam->azimuth-=0.10f; cam->update(true); }
             if (key==GLFW_KEY_RIGHT) { cam->azimuth+=0.10f; cam->update(true); }
@@ -321,6 +353,13 @@ void setupCameraCallbacks(GLFWwindow* win) {
                 cam->dirty=true;
                 std::cout<<"[INFO] Color mode: "<<kColorModeNames[m]<<" ("<<m<<")\n";
             }
+            // P: cycle through built-in scene presets (spin / tilt / palette / zoom / anim).
+            if (key==GLFW_KEY_P) {
+                g_presetIdx = (g_presetIdx + 1) % kNumPresets;
+                applyPreset(g_presetIdx);
+                saveSessionState(g_currentMode);
+                std::cout<<"[INFO] Preset "<<(g_presetIdx+1)<<"/"<<kNumPresets<<"\n";
+            }
         }
     });
 }
@@ -369,6 +408,11 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i],"--cinematic")) g_cinematic=true;
         else if (!strcmp(argv[i],"--anim"))  engine.diskAnimEnabled=true;
         else if (!strcmp(argv[i],"--legacy")||!strcmp(argv[i],"-l")||!strcmp(argv[i],"legacy")) legacyMode=true;
+        else if (!strcmp(argv[i],"--preset") && i+1<argc) {
+            const char* pname = argv[++i];
+            for (int pi=0; pi<kNumPresets; ++pi)
+                if (!strcmp(kPresets[pi].name, pname)) { g_presetIdx=pi; break; }
+        }
         else if (!strcmp(argv[i],"--render")) renderMode=true;
         else if (!strcmp(argv[i],"--size") && i+1<argc) { sscanf(argv[++i],"%dx%d",&rW,&rH); }
         else if (!strcmp(argv[i],"--elev") && i+1<argc) rElev=atof(argv[++i]);
@@ -412,11 +456,13 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     if (terminalMode) {
         g_currentMode="terminal"; restoreSession(g_currentMode);
+        if (g_presetIdx>=0) { applyPreset(g_presetIdx); engine.kerrSpin=kPresets[g_presetIdx].spin; }
         runTerminal(engine); saveSessionState(g_currentMode);
         glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
     }
     if (dcompMode) {
         g_currentMode="wallpaper"; restoreSession(g_currentMode);
+        if (g_presetIdx>=0) { applyPreset(g_presetIdx); engine.kerrSpin=kPresets[g_presetIdx].spin; }
         runWallpaperDComp(engine.window, engine); saveSessionState(g_currentMode);
         glfwDestroyWindow(engine.window); glfwTerminate(); return 0;
     }
@@ -442,6 +488,9 @@ int main(int argc, char** argv) {
         engine.COMPUTE_D_LAMBDA=engine.COMPUTE_MOVING_D_LAMBDA=7.5e8f;
     }
 
+    // Apply startup preset AFTER all session restores (window + wallpaper modes).
+    if (g_presetIdx >= 0) applyPreset(g_presetIdx);
+
     int accumSample=0;
     int ACCUM_SAMPLES = wallpaperMode ? 16 : 4;
     const double wpMinFrame = wallpaperMode ? (1.0/30.0) : 0.0;
@@ -457,17 +506,24 @@ int main(int argc, char** argv) {
         if (g_paused && !wallpaperMode) {
             updateWindowTitle(); glfwWaitEventsTimeout(1.0/30.0); continue;
         }
-        // Ease the Kerr spin toward its target (set by K/./,) so the disk morphs
-        // smoothly. While easing we hold the frame dirty so it re-renders each step.
+        // Per-frame animation tick: ease spin + advance merger wave timer.
         {
             static double lastT = glfwGetTime();
             double nowT = glfwGetTime();
             float  dt   = glm::clamp(float(nowT - lastT), 0.0f, 0.1f);
             lastT = nowT;
+            // Smooth Kerr-spin lerp (K / . / , or preset)
             if (g_spinTarget >= 0.0f) {
                 float diff = g_spinTarget - engine.kerrSpin, step = kSpinLerpRate * dt;
                 if (std::fabs(diff) <= step) { engine.kerrSpin = g_spinTarget; g_spinTarget = -1.0f; }
                 else engine.kerrSpin += (diff > 0.0f ? step : -step);
+                camera.dirty = true;
+            }
+            // Merger wave (W key): advance timer, expire after 4.5 s
+            if (g_mergerElapsed >= 0.0f) {
+                g_mergerElapsed   += dt;
+                engine.mergerTime  = g_mergerElapsed;
+                if (g_mergerElapsed > 4.5f) { g_mergerElapsed = -1.0f; engine.mergerTime = -1.0f; }
                 camera.dirty = true;
             }
         }

@@ -23,6 +23,7 @@ layout(std140, binding = 1) uniform Camera {
     float time;       // elapsed seconds, for Keplerian disk animation
     int diskAnim;     // 1 = animate disk material (Keplerian rotation)
     float bhTilt;     // BH symmetry-axis tilt (radians) around X; spin axis follows
+    float mergerTime; // seconds since W-key merger wave (<0 = inactive)
 } cam;
 
 // Camera position in the BH's LOCAL frame (disk plane = y=0, spin axis = +y).
@@ -412,6 +413,17 @@ vec3 diskShade(float dhR, float dhX, float dhZ) {
     diskColor   *= clamp(gr*gr*gr, 0.03, 1.0);
     diskColor.g *= gr;
     diskColor.b *= gr*gr;
+    // Merger wave (W key): a bright ring propagates outward through the disk,
+    // plus a brief blue-white flash at the inner edge on trigger.
+    if (cam.mergerTime >= 0.0) {
+        float mt  = cam.mergerTime;
+        float wr  = mt * 2.8e9;                                  // SI wavefront radius
+        float dw  = dhR - wr;
+        float amp = exp(-dw*dw / (1.4e10*1.4e10)) * exp(-mt * 0.8) * 3.0;
+        diskColor += amp * vec3(0.72, 0.88, 1.00);               // blue-white ring
+        diskColor += exp(-mt * 5.0) * exp(-dhR / (disk_r1 * 3.0))
+                   * vec3(1.00, 0.82, 0.60) * 5.0;              // initial horizon flash
+    }
     return diskColor;
 }
 
@@ -550,6 +562,113 @@ vec3 meteorEmission(vec3 p) {
     float headGlow = exp(-dHead*dHead / (2.0*headRad*headRad)) * headBri;
 
     return col * (glow + headGlow) * bright;
+}
+
+// ── Planet surface shaders ───────────────────────────────────────────────────
+// Five distinct worlds; type encoded in objColor.a (10=ocean, 11=rocky,
+// 12=desert, 13=volcanic, 14=jungle). mu = max(dot(N,V),0), seed = per-surface coords.
+
+vec3 shadeOcean(vec3 N, float mu, vec3 seed) {
+    float cont  = fbm(seed * 1.2 + 5.0);
+    float coast = smoothstep(0.48, 0.58, cont);
+    vec3  ocean = mix(vec3(0.02, 0.10, 0.48), vec3(0.05, 0.22, 0.64), fbm(seed * 8.0));
+    vec3  land  = mix(vec3(0.06, 0.30, 0.06), vec3(0.18, 0.48, 0.10), fbm(seed * 3.0));
+    vec3  sand  = vec3(0.65, 0.60, 0.38);
+    vec3  surf  = mix(ocean, mix(sand, land, smoothstep(0.50, 0.56, cont)), coast);
+    // Polar ice caps
+    float lat   = abs(N.y);
+    surf = mix(surf, vec3(0.82, 0.90, 1.00), smoothstep(0.62, 0.85, lat));
+    // Cloud cover (animated slowly)
+    float cloud = fbm(seed * 2.5 + cam.time * 0.018) * fbm(seed * 5.0 + 3.3);
+    cloud = smoothstep(0.46, 0.70, cloud);
+    surf  = mix(surf, vec3(0.90, 0.94, 1.00), cloud * 0.72);
+    // Specular glint on open ocean
+    surf += vec3(0.12) * pow(mu, 10.0) * (1.0 - cloud) * (1.0 - coast);
+    // Atmosphere rim glow
+    float atm = pow(max(1.0 - mu, 0.0), 3.2);
+    surf = mix(surf, vec3(0.38, 0.60, 1.00), atm * 0.45);
+    return surf * (0.55 + 0.45 * mu);
+}
+
+vec3 shadeRocky(vec3 N, float mu, vec3 seed) {
+    float base   = fbm(seed * 2.5);
+    float detail = fbm(seed * 9.0);
+    vec3  rock   = mix(vec3(0.20, 0.17, 0.14), vec3(0.46, 0.42, 0.36), base);
+    // Crater rims: 4 fixed depressions per planet
+    float crat = 0.0;
+    for (int c = 0; c < 4; ++c) {
+        vec3  cen = normalize(hash33(vec3(float(c) * 7.3 + 1.1)));
+        float d   = length(N - cen);
+        crat += smoothstep(0.23, 0.18, d) * smoothstep(0.14, 0.21, d);
+    }
+    rock  = mix(rock, rock * 0.42, clamp(crat * 0.7, 0.0, 0.9));
+    rock *= 0.68 + 0.32 * detail;
+    return rock * mu;   // hard terminator — no atmosphere
+}
+
+vec3 shadeDesert(vec3 N, float mu, vec3 seed) {
+    float dunes = fbm(seed * 4.0) * fbm(N.xzy * 3.0 + 7.0);  // directional dune pattern
+    float rock  = fbm(seed * 1.5 + 20.0);
+    vec3  sand  = mix(vec3(0.80, 0.60, 0.22), vec3(0.64, 0.38, 0.13), dunes);
+    sand  = mix(sand, vec3(0.55, 0.34, 0.20), smoothstep(0.50, 0.72, rock));
+    // Dust storm streaks (faint, slowly shifting)
+    float storm = fbm(seed * 6.0 + cam.time * 0.007);
+    sand  = mix(sand, vec3(0.90, 0.78, 0.54), smoothstep(0.63, 0.72, storm) * 0.38);
+    // Thin reddish atmosphere
+    float atm = pow(max(1.0 - mu, 0.0), 4.0);
+    sand  = mix(sand, vec3(0.78, 0.44, 0.22), atm * 0.28);
+    return sand * (0.50 + 0.50 * mu);
+}
+
+vec3 shadeVolcanic(vec3 N, float mu, vec3 seed) {
+    float surf  = fbm(seed * 3.0);
+    vec3  bas   = mix(vec3(0.08, 0.05, 0.04), vec3(0.24, 0.16, 0.12), surf);
+    // Lava cracks: thin bright veins on the surface
+    float crak  = fbm(seed * 7.5);
+    float lava  = smoothstep(0.60, 0.72, crak);
+    vec3  lavaC = mix(vec3(1.00, 0.32, 0.00), vec3(1.00, 0.68, 0.00),
+                      fbm(seed * 16.0 + cam.time * 0.08));
+    bas = mix(bas, lavaC, lava);
+    // Self-illuminated lava cracks glow even in shadow
+    vec3  res = bas * (0.38 + 0.62 * mu) + lavaC * lava * 0.42;
+    // Sulphurous atmosphere rim
+    float atm = pow(max(1.0 - mu, 0.0), 2.8);
+    return mix(res, vec3(0.34, 0.26, 0.08), atm * 0.22);
+}
+
+vec3 shadeJungle(vec3 N, float mu, vec3 seed) {
+    float cont  = fbm(seed * 1.1 + 30.0);
+    float biome = fbm(seed * 2.0 + 40.0);
+    float lat   = abs(N.y);
+    vec3  ocean = vec3(0.02, 0.12, 0.46);
+    vec3  jung  = mix(vec3(0.04, 0.28, 0.04), vec3(0.10, 0.40, 0.06), biome);
+    vec3  sav   = mix(vec3(0.54, 0.50, 0.16), vec3(0.62, 0.36, 0.10), biome);
+    vec3  snow  = vec3(0.85, 0.90, 0.96);
+    // Blend biomes by latitude
+    vec3  land  = mix(jung, sav,
+                      smoothstep(0.25, 0.55, biome) * (1.0 - smoothstep(0.40, 0.72, lat)));
+    land  = mix(land, snow, smoothstep(0.54, 0.78, lat));
+    float shore = smoothstep(0.46, 0.56, cont);
+    vec3  surf  = mix(ocean, land, shore);
+    // Ocean glint
+    surf += vec3(0.08, 0.10, 0.14) * pow(mu, 10.0) * (1.0 - shore);
+    // Swirling cloud bands + scattered cloud cells
+    float cloud = max(fbm(seed * 2.0 + cam.time * 0.012) * fbm(seed.yzx * 4.0),
+                      (sin(N.y * 5.5 + 0.3) * 0.5 + 0.5) * fbm(seed * 3.0 + 1.8));
+    cloud = smoothstep(0.42, 0.68, cloud);
+    surf  = mix(surf, vec3(0.90, 0.94, 1.00), cloud * 0.78);
+    // Rich blue atmosphere
+    float atm = pow(max(1.0 - mu, 0.0), 2.8);
+    surf  = mix(surf, vec3(0.32, 0.56, 1.00), atm * 0.48);
+    return surf * (0.52 + 0.48 * mu);
+}
+
+vec3 shadePlanet(vec3 N, float mu, vec3 seed, int ptype) {
+    if (ptype == 10) return shadeOcean(N, mu, seed);
+    if (ptype == 11) return shadeRocky(N, mu, seed);
+    if (ptype == 12) return shadeDesert(N, mu, seed);
+    if (ptype == 13) return shadeVolcanic(N, mu, seed);
+    return shadeJungle(N, mu, seed);   // 14
 }
 
 void main() {
@@ -713,24 +832,43 @@ void main() {
         vec3 P = vec3(ray.x, ray.y, ray.z);
         vec3 N = normalize(P - hitCenter);
         vec3 V = normalize(gCamL - P);
-        float mu = max(dot(N, V), 0.0);                       // cos(view angle)
-        float limb = 0.40 + 0.60 * pow(mu, 0.55);             // solar limb darkening
-        vec3  seed = N * 6.0 + hitCenter * 1e-11;             // surface coords + per-sun offset
-        float gran = fbm(seed * 1.8 + cam.time * 0.05);       // boiling granulation
-        float spots = fbm(seed * 0.7 + 13.0);                 // low-freq starspots
-        float surf = limb * (0.78 + 0.36 * gran)
-                          * mix(0.50, 1.0, smoothstep(0.34, 0.50, spots));   // darken spots
-        vec3 col = objectColor.rgb * surf * sunFlare(objectColor.rgb);
-        col = mix(col, col + vec3(0.45), 0.22 * pow(mu, 5.0));  // hot, whiter core
-        bg = col; bgLit = true;
+        float mu   = max(dot(N, V), 0.0);
+        vec3  seed = N * 6.0 + hitCenter * 1e-11;   // surface coords + per-body offset
+        int   objType = int(round(objectColor.a));
+        if (objType >= 10) {
+            // Procedural planet (type 10–14) — unique surface per world
+            bg = shadePlanet(N, mu, seed, objType);
+        } else {
+            // Star / sun path: limb-darkening, granulation, starspots, flare
+            float limb  = 0.40 + 0.60 * pow(mu, 0.55);
+            float gran  = fbm(seed * 1.8 + cam.time * 0.05);
+            float spots = fbm(seed * 0.7 + 13.0);
+            float surf  = limb * (0.78 + 0.36 * gran)
+                               * mix(0.50, 1.0, smoothstep(0.34, 0.50, spots));
+            vec3 col = objectColor.rgb * surf * sunFlare(objectColor.rgb);
+            col = mix(col, col + vec3(0.45), 0.22 * pow(mu, 5.0));
+            bg = col;
+        }
+        bgLit = true;
 
     } else if (escaped || ray.r > 6.0) {
-        // Escaped, OR ran out of steps already out in the weak field (its direction
-        // is settled) — sample the sky. Using the finite-difference travel direction
-        // avoids the polar-axis singularity of the analytic reconstruction (which
-        // drew a bright seam line up the spin axis). The r>6 clause also stops the
-        // big black disk that appeared when zoomed far out.
-        bg = deepSky(gBhR * lastStepDir); bgLit = true;
+        // Escaped — sample the sky along the geodesic escape direction.
+        // During a merger wave, distort the escape direction as the wave sweeps past,
+        // causing the background starfield to briefly smear/ripple.
+        vec3 escDir = lastStepDir;
+        if (cam.mergerTime >= 0.0) {
+            float mt    = cam.mergerTime;
+            float waveR = mt * 2.8e9;                        // SI expanding shell
+            float camR  = length(cam.camPos);
+            if (waveR > camR * 0.25 && waveR < 3.5e12) {
+                float amp  = exp(-mt * 0.55) * min(camR / max(waveR, 1.0), 1.0) * 0.38;
+                vec3  ax   = normalize(cam.camPos);
+                vec3  perp = escDir - dot(escDir, ax) * ax;
+                if (length(perp) > 0.02)
+                    escDir = normalize(escDir + amp * normalize(perp) * sin(mt * 9.0));
+            }
+        }
+        bg = deepSky(gBhR * escDir); bgLit = true;
 
     } else {
         // Still deep in the field (r ≤ 6) and not escaping → captured or winding at
@@ -739,6 +877,11 @@ void main() {
     }
 
     vec3 rgb = diskAccum + diskTrans * bg;
+    // Merger energy burst: brief full-scene brightening + blue-shift at t=0
+    if (cam.mergerTime >= 0.0 && !hitBlackHole) {
+        float pulse = exp(-cam.mergerTime * 3.5) * 0.75;
+        rgb += vec3(0.10, 0.15, 0.28) * pulse;
+    }
     // Guard against any NaN/Inf from the Kerr integration (e.g. a ray skimming the
     // horizon) — otherwise it reads back as a transparent pixel in wallpaper mode.
     if (any(isnan(rgb)) || any(isinf(rgb))) rgb = vec3(0.0);
