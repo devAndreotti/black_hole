@@ -1,6 +1,6 @@
 #pragma once
-#ifdef _WIN32
 #include "bh_engine.hpp"
+#ifdef _WIN32
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #include <d3d11.h>
